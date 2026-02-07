@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+dist/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Go
+*.exe
+*.test
+vendor/
+
+# Rust
+target/
+*.rs.bk
+
+# Universal
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.env
+.env.*
