@@ -1,43 +1,30 @@
 {
   "permissions": {
     "allow": [
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
       "WebSearch",
-      "WebFetch(domain:github.com)",
+      "WebFetch",
 
-      "Bash(uv init:*)",
-      "Bash(uv sync:*)",
-      "Bash(uv run:*)",
-      "Bash(uv tool install:*)",
-      "Bash(uv add:*)",
-
-      "Bash(git checkout:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(git push:*)",
-      "Bash(git pull:*)",
-      "Bash(git branch:*)",
-      "Bash(git fetch:*)",
-      "Bash(git status:*)",
-      "Bash(git diff:*)",
-      "Bash(git log:*)",
-      "Bash(git merge:*)",
-
-      "Bash(gh pr create:*)",
-      "Bash(gh pr merge:*)",
-      "Bash(gh pr view:*)",
-      "Bash(gh repo create:*)",
-      "Bash(gh repo edit:*)",
-      "Bash(gh workflow run:*)",
-      "Bash(gh run list:*)",
-      "Bash(gh run watch:*)",
-
-      "Bash(python3:*)",
-      "Bash(curl:*)",
-
-      "Bash(.specify/scripts/bash/create-new-feature.sh:*)",
-      "Bash(.specify/scripts/bash/setup-plan.sh:*)",
-      "Bash(.specify/scripts/bash/update-agent-context.sh:*)",
-      "Bash(.specify/scripts/bash/check-prerequisites.sh:*)"
+      ".specify/scripts/bash/create-new-feature.sh:*",
+      ".specify/scripts/bash/setup-plan.sh:*",
+      ".specify/scripts/bash/update-agent-context.sh:*",
+      ".specify/scripts/bash/check-prerequisites.sh:*"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(rm -r:*)",
+      "Bash(rmdir:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git checkout -- :*)",
+      "Bash(git clean -f:*)",
+      "Bash(git branch -D:*)"
     ]
   }
 }
