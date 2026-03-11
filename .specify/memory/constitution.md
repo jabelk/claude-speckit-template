@@ -2,7 +2,7 @@
   Sync Impact Report
   Version change: 0.0.0 → 0.0.0 (template — not yet ratified)
   Added principles: none (placeholders)
-  Added sections: Core Principles, Scope, Development Workflow, Governance
+  Added sections: Core Principles, Scope, Testing Philosophy, Quality Gates, Development Workflow, Key Decisions, Governance
   Templates requiring updates: none
   Follow-up TODOs: Run /speckit.constitution to fill in project-specific principles
 -->
@@ -13,10 +13,8 @@
 
 <!--
   Run /speckit.constitution to replace these placeholders with your project's
-  non-negotiable principles. Each principle should be:
-  - Declarative and testable
-  - Written with MUST/SHOULD language
-  - Accompanied by a brief rationale
+  non-negotiable principles. Each principle should follow the
+  Statement + Constraints + Rationale format shown below.
 
   Example principles to consider:
   - Simplicity (YAGNI, minimal abstractions)
@@ -28,19 +26,66 @@
 
 ### I. [PRINCIPLE_1_NAME]
 
-[PRINCIPLE_1_DESCRIPTION]
+**Statement**: [PRINCIPLE_1_DESCRIPTION — declarative, using MUST/SHOULD language]
+
+**Constraints**:
+- [What this principle forbids or limits]
+- [Boundaries that implementations must respect]
+
+**Rationale**: [Why this principle exists — the cost of violating it]
 
 ### II. [PRINCIPLE_2_NAME]
 
-[PRINCIPLE_2_DESCRIPTION]
+**Statement**: [PRINCIPLE_2_DESCRIPTION]
+
+**Constraints**:
+- [What this principle forbids or limits]
+- [Boundaries that implementations must respect]
+
+**Rationale**: [Why this principle exists]
 
 ### III. [PRINCIPLE_3_NAME]
 
-[PRINCIPLE_3_DESCRIPTION]
+**Statement**: [PRINCIPLE_3_DESCRIPTION]
+
+**Constraints**:
+- [What this principle forbids or limits]
+- [Boundaries that implementations must respect]
+
+**Rationale**: [Why this principle exists]
 
 ## Scope
 
-[PROJECT_SCOPE_DESCRIPTION]
+### In Scope
+
+- [PRIMARY_CAPABILITY_1]
+- [PRIMARY_CAPABILITY_2]
+
+### Out of Scope
+
+- [EXCLUDED_CAPABILITY_1 — and why]
+- [EXCLUDED_CAPABILITY_2 — and why]
+
+## Testing Philosophy
+
+<!--
+  Default: TDD required. Tests are written before implementation.
+  Adjust to match your project's needs during /speckit.constitution.
+-->
+
+- **TDD required**: Write tests before implementation code.
+- Tests MUST cover all acceptance criteria from the spec.
+- Tests SHOULD be independent and deterministic.
+- Prefer integration tests at system boundaries; unit tests for complex logic.
+- Test failures block merges — no exceptions.
+
+## Quality Gates
+
+| Phase | Gate | Required |
+|-------|------|----------|
+| **Pre-Commit** | Tests pass, linter clean, no secrets in diff | Yes |
+| **Pre-Merge** | All CI checks green, PR reviewed or self-reviewed against spec | Yes |
+| **Release** | All acceptance criteria verified, no open `bug` issues for milestone | Yes |
 
 ## Development Workflow
 
@@ -48,11 +93,37 @@
 - Follow the spec-kit workflow: specify → plan → tasks → implement.
 - Commit after each logical unit of work with a descriptive message.
 - Keep PRs focused — one feature or fix per PR.
+- Track work with GitHub Issues: label `feature` for new work, `bug` for defects.
+
+## Key Decisions
+
+<!--
+  Record significant architectural or design decisions here.
+  Each decision should have a revisit trigger — a condition under which
+  the decision should be reconsidered.
+-->
+
+| # | Decision | Date | Revisit Trigger |
+|---|----------|------|-----------------|
+| 1 | [DECISION_DESCRIPTION] | [DATE] | [CONDITION_THAT_WOULD_CHANGE_THIS] |
 
 ## Governance
 
 This constitution is the highest-priority reference for all implementation decisions. If a spec
 or plan conflicts with a principle here, the constitution wins. Amendments require updating this
 file, incrementing the version, and noting the change in the sync impact report comment above.
+
+### Elevated Constraints
+
+Some principles are **non-negotiable**. Relaxing an elevated constraint requires:
+
+1. Explicit justification documented in the relevant spec or plan.
+2. Approval from the project owner.
+3. A note in the Key Decisions table with a revisit trigger.
+
+<!--
+  Mark principles as elevated by adding ⚑ after the principle name, e.g.:
+  ### I. Simplicity ⚑
+-->
 
 **Version**: 0.0.0 | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
