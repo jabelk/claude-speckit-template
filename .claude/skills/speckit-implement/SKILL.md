@@ -1,6 +1,15 @@
 ---
-description: Execute the implementation plan by processing and executing all tasks defined in tasks.md
+name: "speckit-implement"
+description: "Execute the implementation plan by processing and executing all tasks defined in tasks.md"
+argument-hint: "Optional implementation guidance or task filter"
+compatibility: "Requires spec-kit project structure with .specify/ directory"
+metadata:
+  author: "github-spec-kit"
+  source: "templates/commands/implement.md"
+user-invocable: true
+disable-model-invocation: true
 ---
+
 
 ## User Input
 
@@ -9,6 +18,40 @@ $ARGUMENTS
 ```
 
 You **MUST** consider the user input before proceeding (if not empty).
+
+## Pre-Execution Checks
+
+**Check for extension hooks (before implementation)**:
+- Check if `.specify/extensions.yml` exists in the project root.
+- If it exists, read it and look for entries under the `hooks.before_implement` key
+- If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+- Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
+- For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
+  - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
+  - If the hook defines a non-empty `condition`, skip the hook and leave condition evaluation to the HookExecutor implementation
+- For each executable hook, output the following based on its `optional` flag:
+  - **Optional hook** (`optional: true`):
+    ```
+    ## Extension Hooks
+
+    **Optional Pre-Hook**: {extension}
+    Command: `/{command}`
+    Description: {description}
+
+    Prompt: {prompt}
+    To execute: `/{command}`
+    ```
+  - **Mandatory hook** (`optional: false`):
+    ```
+    ## Extension Hooks
+
+    **Automatic Pre-Hook**: {extension}
+    Executing: `/{command}`
+    EXECUTE_COMMAND: {command}
+    
+    Wait for the result of the hook command before proceeding to the Outline.
+    ```
+- If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently
 
 ## Outline
 
@@ -85,7 +128,7 @@ You **MUST** consider the user input before proceeding (if not empty).
    - **Rust**: `target/`, `debug/`, `release/`, `*.rs.bk`, `*.rlib`, `*.prof*`, `.idea/`, `*.log`, `.env*`
    - **Kotlin**: `build/`, `out/`, `.gradle/`, `.idea/`, `*.class`, `*.jar`, `*.iml`, `*.log`, `.env*`
    - **C++**: `build/`, `bin/`, `obj/`, `out/`, `*.o`, `*.so`, `*.a`, `*.exe`, `*.dll`, `.idea/`, `*.log`, `.env*`
-   - **C**: `build/`, `bin/`, `obj/`, `out/`, `*.o`, `*.a`, `*.so`, `*.exe`, `Makefile`, `config.log`, `.idea/`, `*.log`, `.env*`
+   - **C**: `build/`, `bin/`, `obj/`, `out/`, `*.o`, `*.a`, `*.so`, `*.exe`, `*.dll`, `autom4te.cache/`, `config.status`, `config.log`, `.idea/`, `*.log`, `.env*`
    - **Swift**: `.build/`, `DerivedData/`, `*.swiftpm/`, `Packages/`
    - **R**: `.Rproj.user/`, `.Rhistory`, `.RData`, `.Ruserdata`, `*.Rproj`, `packrat/`, `renv/`
    - **Universal**: `.DS_Store`, `Thumbs.db`, `*.tmp`, `*.swp`, `.vscode/`, `.idea/`
@@ -132,27 +175,33 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Confirm the implementation follows the technical plan
    - Report final status with summary of completed work
 
-10. **Post-Implementation Wrap-up**:
-
-   After all tasks are complete and validation passes:
-
-   - **Run the project's test suite and linter** automatically:
-     - Execute the test command defined in the project (check `CLAUDE.md` for `{{TEST_COMMAND}}`)
-     - Execute the lint command (check `CLAUDE.md` for `{{LINT_COMMAND}}`)
-     - If either fails, report the failures and fix before proceeding
-
-   - **Create a pull request** against `main`:
-     - Title: derived from the spec name (e.g., "Add [feature-name]")
-     - Body: summary of completed tasks, link to the spec, and test results
-     - Use `gh pr create` with appropriate title and body
-
-   - **Update GitHub Issues**:
-     - If tasks were converted to issues via `/speckit.taskstoissues`, verify completed issues are referenced in the PR with `Closes #N`
-     - Suggest creating a new issue for any follow-up work identified during implementation
-
-   - **Suggest lessons learned** (if applicable):
-     - If unexpected issues arose during implementation, suggest recording them in `.specify/memory/lessons-learned/`
-     - If a workaround was required, suggest documenting it
-     - Do not auto-create lesson files — only suggest and let the user decide
-
 Note: This command assumes a complete task breakdown exists in tasks.md. If tasks are incomplete or missing, suggest running `/speckit.tasks` first to regenerate the task list.
+
+10. **Check for extension hooks**: After completion validation, check if `.specify/extensions.yml` exists in the project root.
+    - If it exists, read it and look for entries under the `hooks.after_implement` key
+    - If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally
+    - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
+    - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
+      - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
+      - If the hook defines a non-empty `condition`, skip the hook and leave condition evaluation to the HookExecutor implementation
+    - For each executable hook, output the following based on its `optional` flag:
+      - **Optional hook** (`optional: true`):
+        ```
+        ## Extension Hooks
+
+        **Optional Hook**: {extension}
+        Command: `/{command}`
+        Description: {description}
+
+        Prompt: {prompt}
+        To execute: `/{command}`
+        ```
+      - **Mandatory hook** (`optional: false`):
+        ```
+        ## Extension Hooks
+
+        **Automatic Hook**: {extension}
+        Executing: `/{command}`
+        EXECUTE_COMMAND: {command}
+        ```
+    - If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently

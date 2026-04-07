@@ -1,0 +1,97 @@
+name: Check Spec Kit Updates
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9am UTC
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get current spec-kit version
+        id: current
+        run: |
+          VERSION=$(jq -r '.speckit_version // .version // "unknown"' .specify/init-options.json 2>/dev/null || echo "unknown")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Get latest upstream spec-kit release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST=$(gh release view --repo github/spec-kit --json tagName --jq '.tagName' 2>/dev/null || echo "unknown")
+          echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+
+          # Get release notes
+          BODY=$(gh release view --repo github/spec-kit --json body --jq '.body' 2>/dev/null || echo "")
+          # Truncate to 3000 chars to fit in issue body
+          BODY="${BODY:0:3000}"
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "body<<$EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY" >> "$GITHUB_OUTPUT"
+          echo "$EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Compare versions
+        id: compare
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          UPSTREAM="${{ steps.upstream.outputs.version }}"
+          # Strip 'v' prefix for comparison
+          UPSTREAM_CLEAN="${UPSTREAM#v}"
+          echo "current=$CURRENT"
+          echo "upstream=$UPSTREAM_CLEAN"
+          if [[ "$CURRENT" == "$UPSTREAM_CLEAN" ]]; then
+            echo "needs_update=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_update=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for existing issue
+        if: steps.compare.outputs.needs_update == 'true'
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING=$(gh issue list --label "spec-kit-update" --state open --json number --jq 'length')
+          echo "count=$EXISTING" >> "$GITHUB_OUTPUT"
+
+      - name: Open update issue
+        if: steps.compare.outputs.needs_update == 'true' && steps.existing.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Spec Kit update available: ${{ steps.current.outputs.version }} → ${{ steps.upstream.outputs.version }}" \
+            --label "spec-kit-update" \
+            --body "$(cat <<'ISSUE_EOF'
+          ## Spec Kit Update Available
+
+          | | Version |
+          |---|---|
+          | **Current** | `${{ steps.current.outputs.version }}` |
+          | **Upstream** | `${{ steps.upstream.outputs.version }}` |
+
+          ### Upstream Release Notes
+
+          ${{ steps.upstream.outputs.body }}
+
+          ### How to update
+
+          ```bash
+          ./setup.sh
+          ```
+
+          This will upgrade the `specify` CLI and re-run `specify init` to pull the latest scripts, templates, and skills. Custom skills (`/feature`, `/review-plan`) are backed up and restored automatically.
+
+          ### After updating
+
+          - Review `git diff` for any changes to spec-kit skills or scripts
+          - Check if upstream fixed the dot-notation references in SKILL.md files
+          - Test that `/feature` and `/review-plan` still work correctly
+          ISSUE_EOF
+          )"
