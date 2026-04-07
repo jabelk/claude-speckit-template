@@ -45,11 +45,12 @@ cd "$TARGET_DIR"
 git init -q
 
 # Run setup.sh to pull latest spec-kit (adds/updates skills)
-# Run in subshell so a non-zero exit doesn't kill this script
+# </dev/null prevents it from consuming the curl pipe's stdin
 echo ""
-(./setup.sh) || echo "Warning: setup.sh exited with errors, continuing..." >&2
+./setup.sh </dev/null || echo "Warning: setup.sh exited with errors, continuing..." >&2
 
 # Commit everything — template files + spec-kit output — in one shot
+echo "Creating initial commit..."
 git add -A
 git commit -q -m "Initial project from claude-speckit-template"
 
