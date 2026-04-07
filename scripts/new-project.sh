@@ -40,9 +40,11 @@ rm -f "$TMPDIR/tpl/scripts/migrate-repos.sh"  # not needed in new projects
 cp -a "$TMPDIR/tpl/." "$TARGET_DIR/"
 rm -rf "$TMPDIR"
 
-# Init fresh git
+# Init fresh git with initial commit
 cd "$TARGET_DIR"
 git init -q
+git add -A
+git commit -q -m "Initial project from claude-speckit-template"
 
 # Run setup.sh to pull latest spec-kit
 echo ""
