@@ -2,7 +2,7 @@
 name: "review-plan"
 description: "Multi-model peer review — sends spec + plan to external AI models for independent critique before implementation."
 argument-hint: "Optionally pass a specific feature dir (e.g., specs/003-auth-flow)"
-compatibility: "Requires spec-kit project structure, .env with API keys (DEEPSEEK_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY)"
+compatibility: "Requires spec-kit project structure, .env with API keys (OPENAI_API_KEY, GEMINI_API_KEY)"
 metadata:
   author: "jabelk"
   source: "claude-code-template"
@@ -12,11 +12,11 @@ disable-model-invocation: true
 
 # Review Plan — Multi-Model Peer Review
 
-Send the current feature's spec + plan to external AI models (DeepSeek R1, OpenAI o4-mini, Gemini 2.5 Flash) for independent peer review before implementation begins.
+Send the current feature's spec + plan to external AI models (OpenAI o4-mini, Gemini 2.5 Flash) for independent peer review before implementation begins.
 
 ## Data Sensitivity Warning
 
-Before running, consider whether the spec/plan contains sensitive data (PII, credentials, proprietary business logic). The review sends content to three external API providers. If the project handles sensitive data, confirm with the user before proceeding.
+Before running, consider whether the spec/plan contains sensitive data (PII, credentials, proprietary business logic). The review sends content to external API providers. If the project handles sensitive data, confirm with the user before proceeding.
 
 ## When to use
 

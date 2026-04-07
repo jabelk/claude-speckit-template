@@ -12,7 +12,7 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
 | `.claude/skills/speckit-*` | Spec Kit (dependency) | Spec-driven development commands |
 | `.claude/skills/feature/` | Custom | Full workflow orchestrator (orient, research, specify, plan, review, implement, ship) |
 | `.claude/skills/review-plan/` | Custom | Multi-model peer review gate |
-| `scripts/review-plan.sh` | Custom | Sends plans to DeepSeek R1, OpenAI o4-mini, Gemini 2.5 Flash |
+| `scripts/review-plan.sh` | Custom | Sends plans to OpenAI o4-mini, Gemini 2.5 Flash for peer review |
 | `setup.sh` | Template | Bootstrap script — installs/upgrades spec-kit dependency |
 
 ## Quick Start
