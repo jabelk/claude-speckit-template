@@ -24,18 +24,19 @@ Read these files in order before starting work. Higher priority files take prece
 
 ## Spec Kit Workflow
 
-Use these slash commands in order:
+Use `/feature` to run the full workflow end-to-end, or use individual commands:
 
 ```
-/speckit.constitution  →  Set project principles (once)
-/speckit.specify       →  Write feature spec
-/speckit.clarify       →  Resolve ambiguities (optional)
-/speckit.plan          →  Design implementation
-/speckit.tasks         →  Break into ordered tasks
-/speckit.analyze       →  Check consistency (optional)
-/speckit.checklist     →  Validate requirements (optional)
-/speckit.implement     →  Execute tasks
-/speckit.taskstoissues →  Convert tasks to GitHub Issues
+/speckit-constitution  →  Set project principles (once)
+/speckit-specify       →  Write feature spec
+/speckit-clarify       →  Resolve ambiguities (optional)
+/speckit-plan          →  Design implementation
+/speckit-tasks         →  Break into ordered tasks
+/review-plan           →  Multi-model peer review (before implementing)
+/speckit-analyze       →  Check consistency (optional)
+/speckit-checklist     →  Validate requirements (optional)
+/speckit-implement     →  Execute tasks
+/speckit-taskstoissues →  Convert tasks to GitHub Issues
 ```
 
 ### Script References
@@ -46,6 +47,7 @@ Use these slash commands in order:
 | `setup-plan.sh` | Initialize plan from spec | `.specify/scripts/bash/setup-plan.sh` |
 | `check-prerequisites.sh` | Validate feature status | `.specify/scripts/bash/check-prerequisites.sh --json` |
 | `update-agent-context.sh` | Refresh agent context | `.specify/scripts/bash/update-agent-context.sh` |
+| `review-plan.sh` | Multi-model peer review | `./scripts/review-plan.sh [specs/003-feature-name]` |
 
 ## Common Commands
 

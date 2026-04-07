@@ -1,60 +1,80 @@
-# Claude + Spec Kit Template
+# Claude Code Template
 
-A reusable template for personal projects that use [Claude Code](https://claude.ai/claude-code) with [GitHub Spec Kit](https://github.com/github/spec-kit) for spec-driven development.
+A reusable project template for [Claude Code](https://claude.ai/claude-code) with [GitHub Spec Kit](https://github.com/github/spec-kit) for spec-driven development and multi-model plan review.
 
 ## What's Included
 
-| Path | Purpose |
-|------|---------|
-| `CLAUDE.md` | Agent instructions: branching, testing, doc rules, spec-kit workflow, behavior guidelines |
-| `AGENTS.md` | Agent read order, working rules, script references, common commands |
-| `.specify/memory/constitution.md` | Skeleton constitution with placeholder principles, testing philosophy, quality gates |
-| `.specify/memory/project-tracker.md` | Project state overview — points to GitHub Issues as primary tracker |
-| `.specify/memory/lessons-learned/` | Index and storage for implementation lessons learned |
-| `.specify/memory/complexity-budget.md` | LOC thresholds and dependency guardrails (delete if not needed) |
-| `.specify/templates/` | Spec Kit templates (spec, plan, tasks, checklist, agent-file) |
-| `.specify/scripts/bash/` | Spec Kit helper scripts (feature creation, plan setup, prerequisites, agent context) |
-| `.claude/commands/speckit.*.md` | 9 slash commands for the specify → plan → tasks → implement workflow |
-| `.gitignore` | Common ignores for Python, Node, Go, Rust |
+| Component | Source | Purpose |
+|-----------|--------|---------|
+| `CLAUDE.md` | Template | Project instructions for Claude (fill in placeholders) |
+| `AGENTS.md` | Template | Agent workflow guide and read order |
+| `.specify/` | Spec Kit (dependency) | Scripts, templates, and memory for spec-driven development |
+| `.claude/skills/speckit-*` | Spec Kit (dependency) | Spec-driven development commands |
+| `.claude/skills/feature/` | Custom | Full workflow orchestrator (orient, research, specify, plan, review, implement, ship) |
+| `.claude/skills/review-plan/` | Custom | Multi-model peer review gate |
+| `scripts/review-plan.sh` | Custom | Sends plans to DeepSeek R1, OpenAI o4-mini, Gemini 2.5 Flash |
+| `setup.sh` | Template | Bootstrap script — installs/upgrades spec-kit dependency |
 
 ## Quick Start
 
-1. Click **"Use this template"** on GitHub (or clone and re-init)
-
-2. Edit `CLAUDE.md` — replace the `{{PLACEHOLDERS}}` at the top:
+1. **Create your repo from this template** (GitHub "Use this template" or clone + re-init)
+2. **Run setup to pull latest spec-kit:**
+   ```bash
+   ./setup.sh
+   ```
+3. **Edit `CLAUDE.md`** — replace `{{PLACEHOLDERS}}` with your project details:
    ```
    {{PROJECT_NAME}}        → Your project name
    {{PROJECT_DESCRIPTION}} → One-line description
    {{LANGUAGE}}            → e.g., Python, TypeScript, Go
    {{PACKAGE_MANAGER}}     → e.g., uv, npm, cargo
-   ```
-
-3. Fill in the command placeholders in `CLAUDE.md` and `AGENTS.md`:
-   ```
    {{INSTALL_COMMAND}}     → e.g., uv sync, npm install
    {{TEST_COMMAND}}        → e.g., uv run pytest, npm test
    {{LINT_COMMAND}}        → e.g., uv run ruff check, npm run lint
    {{BUILD_COMMAND}}       → e.g., npm run build, cargo build
    {{DEV_COMMAND}}         → e.g., npm run dev, cargo run
    ```
+4. **Set up API keys** for multi-model review (optional):
+   ```bash
+   cp .env.example .env
+   # Add your API keys
+   ```
+5. **Start Claude Code and run:**
+   ```
+   /speckit-constitution   # Establish project principles (once)
+   /feature                # Start your first feature
+   ```
 
-4. Run `/speckit.constitution` in Claude Code to fill in your project's principles
+## Prerequisites
 
-5. Start building: `/speckit.specify <describe your first feature>`
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (or Claude Code desktop/web)
+- [Git](https://git-scm.com/)
+- [GitHub CLI](https://cli.github.com/) (`gh`)
+- [uv](https://docs.astral.sh/uv/) (Python package manager, for spec-kit CLI)
 
 ## Workflow
 
+The `/feature` skill orchestrates the full development lifecycle:
+
 ```
-/speckit.constitution  →  Set project principles (once)
-/speckit.specify       →  Write feature spec
-/speckit.clarify       →  Resolve ambiguities (optional)
-/speckit.plan          →  Design implementation
-/speckit.tasks         →  Break into ordered tasks
-/speckit.analyze       →  Check consistency (optional)
-/speckit.checklist     →  Validate requirements (optional)
-/speckit.implement     →  Execute tasks (includes auto-PR and wrap-up)
-/speckit.taskstoissues →  Convert tasks to GitHub Issues
+Phase 1: Orient     → Read context, check backlog, recommend next work
+Phase 2: Research   → Online research before committing to an approach
+Phase 3: Specify    → /speckit-specify — write the feature spec
+Phase 4: Plan       → /speckit-plan + /speckit-tasks — architecture + task breakdown
+Phase 4.5: Review   → /review-plan — multi-model peer review (GREEN/YELLOW/RED)
+Phase 5: Implement  → /speckit-implement — TDD execution
+Phase 6: Ship       → Tests, PR, merge, deploy
 ```
+
+## Updating Spec Kit
+
+Spec Kit is installed as a dependency via `specify init`, not vendored as frozen copies. To pull the latest version:
+
+```bash
+./setup.sh
+```
+
+This upgrades the `specify` CLI and re-runs `specify init` to update scripts, templates, and commands while preserving your custom skills and project files.
 
 ## Work Tracking
 
@@ -62,15 +82,19 @@ This template uses **GitHub Issues as the primary tracker** — not parallel mar
 
 - Label issues with `feature`, `bug`, or `chore`
 - Use milestones for release grouping
-- Convert spec tasks to issues with `/speckit.taskstoissues`
+- Convert spec tasks to issues with `/speckit-taskstoissues`
 - Close issues via PR references (`Closes #N`)
 
-## Prerequisites
+## Customization
 
-- [Claude Code](https://claude.ai/claude-code) CLI
-- Git
-- [GitHub CLI](https://cli.github.com/) (`gh`) — for issue tracking and PR creation
-- [Spec Kit CLI](https://github.com/github/spec-kit) (optional, for `specify` commands):
-  ```bash
-  uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
-  ```
+### review-plan.sh
+
+Edit the `SYSTEM_PROMPT` in `scripts/review-plan.sh` to add framework-specific review focus areas. For example:
+
+```
+6. FRAMEWORK GOTCHAS: SvelteKit/Svelte 5 specific issues ($derived tracking, rune file restrictions)
+```
+
+### Adding Skills
+
+Add new skills in `.claude/skills/<skill-name>/SKILL.md`. See existing skills for the frontmatter format.

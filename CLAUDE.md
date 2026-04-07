@@ -66,13 +66,12 @@ All design decisions, specs, plans, and task tracking live here. This is the **p
 | `.specify/memory/constitution.md` | Non-negotiable project principles. All work must comply. | Rarely — only when principles change. |
 | `.specify/memory/project-tracker.md` | Project state overview and pointer to GitHub Issues. | When milestones or stack change. |
 | `.specify/memory/lessons-learned/` | Lessons learned from implementation. | After resolving unexpected issues. |
-| `.specify/memory/complexity-budget.md` | LOC and dependency thresholds. | When thresholds need adjustment. |
-| `specs/<feature>/spec.md` | What to build. User stories, requirements, acceptance criteria. | Created via `/speckit.specify`, updated if requirements change. |
-| `specs/<feature>/plan.md` | How to build it. Tech choices, architecture, project structure. | Created via `/speckit.plan`, updated if approach changes. |
-| `specs/<feature>/tasks.md` | Ordered task breakdown with dependencies and checkpoints. | Created via `/speckit.tasks`, checked off during implementation. |
-| `specs/<feature>/research.md` | Phase 0 research output (dependencies, alternatives). | Created during `/speckit.plan`. |
-| `specs/<feature>/data-model.md` | Entity definitions and relationships. | Created during `/speckit.plan`. |
-| `specs/<feature>/contracts/` | API contracts, interfaces. | Created during `/speckit.plan`. |
+| `specs/<feature>/spec.md` | What to build. User stories, requirements, acceptance criteria. | Created via `/speckit-specify`, updated if requirements change. |
+| `specs/<feature>/plan.md` | How to build it. Tech choices, architecture, project structure. | Created via `/speckit-plan`, updated if approach changes. |
+| `specs/<feature>/tasks.md` | Ordered task breakdown with dependencies and checkpoints. | Created via `/speckit-tasks`, checked off during implementation. |
+| `specs/<feature>/research.md` | Phase 0 research output (dependencies, alternatives). | Created during `/speckit-plan`. |
+| `specs/<feature>/data-model.md` | Entity definitions and relationships. | Created during `/speckit-plan`. |
+| `specs/<feature>/contracts/` | API contracts, interfaces. | Created during `/speckit-plan`. |
 | `.specify/templates/` | Templates used by spec-kit. Do not edit directly. | Never — managed by spec-kit. |
 | `.specify/scripts/` | Helper scripts for spec-kit. Do not edit directly. | Never — managed by spec-kit. |
 
@@ -93,18 +92,21 @@ High-level documentation for human readers lives in `docs/` and the repo `README
 ## Tracking Work
 
 - **GitHub Issues are the primary tracker.** Use labels: `feature` for new work, `bug` for defects.
-- Use `/speckit.taskstoissues` to convert spec tasks into GitHub Issues.
+- Use `/speckit-taskstoissues` to convert spec tasks into GitHub Issues.
 - Close issues via PR references (e.g., `Closes #12`) — do not close manually unless no code change is needed.
 
 ## Spec-Driven Development Workflow
 
 This project uses [GitHub Spec Kit](https://github.com/github/spec-kit). The workflow is:
 
-1. `/speckit.constitution` — Establish project principles (done once, lives in `.specify/memory/constitution.md`)
-2. `/speckit.specify` — Write the specification for a feature
-3. `/speckit.plan` — Create the implementation plan
-4. `/speckit.tasks` — Break the plan into ordered tasks
-5. `/speckit.implement` — Execute tasks
+1. `/speckit-constitution` — Establish project principles (done once, lives in `.specify/memory/constitution.md`)
+2. `/speckit-specify` — Write the specification for a feature
+3. `/speckit-plan` — Create the implementation plan
+4. `/speckit-tasks` — Break the plan into ordered tasks
+5. `/review-plan` — Multi-model peer review (DeepSeek R1, OpenAI o4-mini, Gemini 2.5 Flash)
+6. `/speckit-implement` — Execute tasks
+
+**Use `/feature` to run the full workflow end-to-end** — it orchestrates all steps in order with research and review gates.
 
 **Before writing any code**, check that a spec and plan exist for the work. If they don't, raise it with the user.
 
@@ -115,6 +117,7 @@ This project uses [GitHub Spec Kit](https://github.com/github/spec-kit). The wor
 - **Do not skip the spec-kit workflow.** If asked to build something new, suggest running through specify → plan → tasks → implement.
 - **Commit after each logical unit of work**, not after every single file change.
 - **When in doubt about a design decision**, check the spec and plan first, then ask the user.
+- **Verify before shipping**: For any new library integration, read the actual installed source code and run a minimal working example BEFORE writing the full implementation.
 
 ## Related Documentation
 
@@ -123,12 +126,11 @@ This project uses [GitHub Spec Kit](https://github.com/github/spec-kit). The wor
 | `.specify/memory/constitution.md` | Project principles, testing philosophy, quality gates |
 | `.specify/memory/project-tracker.md` | Current project state, pointer to GitHub Issues |
 | `.specify/memory/lessons-learned/` | Lessons learned index and topic files |
-| `.specify/memory/complexity-budget.md` | LOC and dependency thresholds |
 | `AGENTS.md` | Agent-specific workflow guide and read order |
 | `specs/` | Feature specifications, plans, and tasks |
 
 ## Active Technologies
-<!-- Updated automatically by spec-kit during /speckit.plan -->
+<!-- Updated automatically by spec-kit during /speckit-plan -->
 
 ## Recent Changes
-<!-- Updated automatically by spec-kit during /speckit.plan -->
+<!-- Updated automatically by spec-kit during /speckit-plan -->
