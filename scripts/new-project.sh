@@ -40,15 +40,17 @@ rm -f "$TMPDIR/tpl/scripts/migrate-repos.sh"  # not needed in new projects
 cp -a "$TMPDIR/tpl/." "$TARGET_DIR/"
 rm -rf "$TMPDIR"
 
-# Init fresh git with initial commit
+# Init git first so setup.sh doesn't try to
 cd "$TARGET_DIR"
 git init -q
-git add -A
-git commit -q -m "Initial project from claude-speckit-template"
 
-# Run setup.sh to pull latest spec-kit
+# Run setup.sh to pull latest spec-kit (adds/updates skills)
 echo ""
 ./setup.sh
+
+# Now commit everything — template files + spec-kit output — in one shot
+git add -A
+git commit -q -m "Initial project from claude-speckit-template"
 
 echo ""
 echo "Project ready at: $TARGET_DIR"
