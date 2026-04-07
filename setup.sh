@@ -54,9 +54,9 @@ specify init --here --ai claude --no-git --force
 
 # Restore custom files
 echo "Restoring custom skills and scripts..."
-cp -r "$BACKUP_DIR/feature" "$REPO_ROOT/.claude/skills/feature" 2>/dev/null || true
-cp -r "$BACKUP_DIR/review-plan" "$REPO_ROOT/.claude/skills/review-plan" 2>/dev/null || true
-cp -r "$BACKUP_DIR/scripts" "$REPO_ROOT/scripts" 2>/dev/null || true
+cp -r "$BACKUP_DIR/feature" "$REPO_ROOT/.claude/skills/feature" 2>/dev/null || echo "Warning: failed to restore /feature skill from backup" >&2
+cp -r "$BACKUP_DIR/review-plan" "$REPO_ROOT/.claude/skills/review-plan" 2>/dev/null || echo "Warning: failed to restore /review-plan skill from backup" >&2
+cp -r "$BACKUP_DIR/scripts" "$REPO_ROOT/scripts" 2>/dev/null || echo "Warning: failed to restore scripts/ from backup" >&2
 rm -rf "$BACKUP_DIR"
 
 echo ""

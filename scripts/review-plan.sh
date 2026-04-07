@@ -199,7 +199,7 @@ except Exception as e:
     if [[ $attempt -eq 1 ]]; then
       echo "  [DeepSeek] Empty response on attempt 1, retrying..." >&2
     else
-      sed -i '' 's/^__EMPTY__$/DeepSeek R1 returned empty after 2 attempts. Check .log for raw response./' "$DEEPSEEK_OUT"
+      tmp=$(mktemp) && sed 's/^__EMPTY__$/DeepSeek R1 returned empty after 2 attempts. Check .log for raw response./' "$DEEPSEEK_OUT" > "$tmp" && mv "$tmp" "$DEEPSEEK_OUT"
     fi
   done
 }
@@ -243,7 +243,7 @@ except Exception as e:
     if [[ $attempt -eq 1 ]]; then
       echo "  [OpenAI] Empty response on attempt 1, retrying..." >&2
     else
-      sed -i '' 's/^__EMPTY__$/OpenAI o4-mini returned empty after 2 attempts. Check .log for raw response./' "$OPENAI_OUT"
+      tmp=$(mktemp) && sed 's/^__EMPTY__$/OpenAI o4-mini returned empty after 2 attempts. Check .log for raw response./' "$OPENAI_OUT" > "$tmp" && mv "$tmp" "$OPENAI_OUT"
     fi
   done
 }
@@ -256,8 +256,9 @@ call_gemini() {
   fi
   local attempt
   for attempt in 1 2; do
-    curl "${CURL_OPTS[@]}" "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" \
+    curl "${CURL_OPTS[@]}" "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" \
       -H "Content-Type: application/json" \
+      -H "x-goog-api-key: $GEMINI_API_KEY" \
       -d "{
         \"system_instruction\": {\"parts\": [{\"text\": $SYSTEM_JSON}]},
         \"contents\": [{\"parts\": [{\"text\": $USER_JSON}]}],
@@ -283,7 +284,7 @@ except Exception as e:
     if [[ $attempt -eq 1 ]]; then
       echo "  [Gemini] Empty response on attempt 1, retrying..." >&2
     else
-      sed -i '' 's/^__EMPTY__$/Gemini 2.5 Flash returned empty after 2 attempts. Check .log for raw response./' "$GEMINI_OUT"
+      tmp=$(mktemp) && sed 's/^__EMPTY__$/Gemini 2.5 Flash returned empty after 2 attempts. Check .log for raw response./' "$GEMINI_OUT" > "$tmp" && mv "$tmp" "$GEMINI_OUT"
     fi
   done
 }

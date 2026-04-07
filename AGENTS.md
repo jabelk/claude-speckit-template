@@ -26,7 +26,7 @@ Read these files in order before starting work. Higher priority files take prece
 
 Use `/feature` to run the full workflow end-to-end, or use individual commands:
 
-```
+```text
 /speckit-constitution  →  Set project principles (once)
 /speckit-specify       →  Write feature spec
 /speckit-clarify       →  Resolve ambiguities (optional)

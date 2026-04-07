@@ -50,11 +50,12 @@ Present findings to user. This step has repeatedly prevented bad architectural d
 ## Phase 4.5: Review (do NOT skip this)
 
 1. Run `/review-plan` — sends spec + plan to DeepSeek R1, OpenAI o4-mini, and Gemini 2.5 Flash for independent peer review
-2. Present the GREEN/YELLOW/RED ratings and top issues to the user
-3. If any RED: strongly recommend fixes; proceed only with explicit user approval
-4. If any YELLOW: review with user and decide whether to fix first
-5. If all providers are SKIPPED (missing API keys): flag to user, perform manual architectural review as fallback
-6. Wait for user approval before moving to Phase 5
+2. The script outputs raw text from each model — you must read the output and interpret the GREEN/YELLOW/RED ratings manually
+3. Present all three reviews to the user with a summary
+4. If any RED: strongly recommend fixes; proceed only with explicit user approval
+5. If any YELLOW: review with user and decide whether to fix first
+6. If all providers are SKIPPED (missing API keys): flag to user, perform manual architectural review as fallback
+7. Wait for user approval before moving to Phase 5
 
 ## Phase 5: Implement
 
