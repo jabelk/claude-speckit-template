@@ -17,19 +17,11 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
 
 ## Quick Start
 
-1. **Create your project** — pick one:
+1. **Create your project** — one command:
    ```bash
-   # Option A: GitHub "Use this template" button (creates a new repo on GitHub)
-
-   # Option B: Clone directly into your project directory
-   mkdir my-project && cd my-project
-   git clone https://github.com/jabelk/claude-speckit-template.git .
-   rm -rf .git && git init   # Fresh history for your project
+   curl -sL https://raw.githubusercontent.com/jabelk/claude-speckit-template/main/scripts/new-project.sh | bash -s my-project
    ```
-2. **Run setup to pull latest spec-kit:**
-   ```bash
-   ./setup.sh
-   ```
+   This clones the template, strips git history, inits a fresh repo, and runs `setup.sh` to pull latest spec-kit — all in one step.
 3. **Edit `CLAUDE.md`** — replace `{{PLACEHOLDERS}}` with your project details:
    ```
    {{PROJECT_NAME}}        → Your project name
