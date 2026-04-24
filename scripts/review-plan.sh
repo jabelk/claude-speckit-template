@@ -3,7 +3,7 @@
 # Usage: ./scripts/review-plan.sh [feature-dir]
 # Example: ./scripts/review-plan.sh specs/003-auth-flow
 #
-# Reads DEEPSEEK_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY from .env
+# Reads OPENAI_API_KEY, GEMINI_API_KEY from .env
 # Calls models in parallel, outputs critiques with GREEN/YELLOW/RED ratings.
 
 set -eo pipefail
@@ -86,7 +86,15 @@ SYSTEM_PROMPT="You are a senior software architect reviewing an implementation p
 
 Rate the plan: GREEN (ship it), YELLOW (fix these issues first), RED (rethink the approach).
 
-Keep your review under 500 words. Lead with the rating and top 3 issues."
+Output format:
+- Lead with the rating on its own line: 'RATING: GREEN|YELLOW|RED'.
+- Then list issues, most severe first. For each issue:
+  - Cite the source: quote the exact line or name the file/section from the spec, plan, tasks, or data model that the issue lives in.
+  - Explain the concrete failure mode (what breaks, when, and why).
+  - If the issue is RED, propose a specific alternative — don't just say 'rethink this'.
+- End with anything the plan got right that you want preserved (one short list).
+
+Be thorough. A truncated review is worse than a long one — you have 8192 output tokens, use what you need."
 
 USER_PROMPT="## Project Architecture & Conventions (CLAUDE.md)
 $CLAUDE_MD
@@ -125,16 +133,15 @@ fi
 PAYLOAD_CHARS=$(( ${#SYSTEM_PROMPT} + ${#USER_PROMPT} ))
 ESTIMATED_TOKENS=$(( PAYLOAD_CHARS / 4 ))
 if [[ $ESTIMATED_TOKENS -gt 40000 ]]; then
-  echo "WARNING: Estimated payload ~${ESTIMATED_TOKENS} tokens (DeepSeek limit: 64K)."
-  echo "  Consider trimming spec files if DeepSeek fails."
+  echo "WARNING: Estimated payload ~${ESTIMATED_TOKENS} tokens."
+  echo "  Consider trimming spec files if reviews fail."
   echo ""
 fi
 
 # Temp files for parallel output
-DEEPSEEK_OUT=$(mktemp)
 OPENAI_OUT=$(mktemp)
 GEMINI_OUT=$(mktemp)
-trap "rm -f $DEEPSEEK_OUT $OPENAI_OUT $GEMINI_OUT $DEEPSEEK_OUT.log $OPENAI_OUT.log $GEMINI_OUT.log" EXIT
+trap "rm -f $OPENAI_OUT $GEMINI_OUT $OPENAI_OUT.log $GEMINI_OUT.log" EXIT
 
 # Escape for JSON
 json_escape() {
@@ -151,60 +158,8 @@ CURL_OPTS=(
   --connect-timeout 10
   --max-time 120
 )
-# DeepSeek R1 needs longer timeout — reasoning models routinely take 3-5 min
-CURL_OPTS_DEEPSEEK=(
-  --silent
-  --show-error
-  --connect-timeout 10
-  --max-time 300
-)
 
-# --- DeepSeek R1 ---
-call_deepseek() {
-  if [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
-    echo "SKIPPED: No DEEPSEEK_API_KEY" > "$DEEPSEEK_OUT"
-    return
-  fi
-  local attempt
-  for attempt in 1 2; do
-    curl "${CURL_OPTS_DEEPSEEK[@]}" https://api.deepseek.com/chat/completions \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
-      -d "{
-        \"model\": \"deepseek-reasoner\",
-        \"messages\": [
-          {\"role\": \"system\", \"content\": $SYSTEM_JSON},
-          {\"role\": \"user\", \"content\": $USER_JSON}
-        ],
-        \"max_tokens\": 2048
-      }" | python3 -c "
-import json, sys
-try:
-    r = json.load(sys.stdin)
-    content = r['choices'][0]['message']['content']
-    if content and content.strip():
-        print(content)
-    else:
-        print('__EMPTY__')
-        print('Raw response:', json.dumps(r, indent=2), file=sys.stderr)
-except Exception as e:
-    print('__EMPTY__')
-    print(f'DeepSeek parse error: {e}', file=sys.stderr)
-    print(json.dumps(r, indent=2) if 'r' in dir() else 'No response body', file=sys.stderr)
-" > "$DEEPSEEK_OUT" 2>>"$DEEPSEEK_OUT.log"
-    # Retry once if response was empty
-    if ! grep -q '^__EMPTY__$' "$DEEPSEEK_OUT" 2>/dev/null; then
-      break
-    fi
-    if [[ $attempt -eq 1 ]]; then
-      echo "  [DeepSeek] Empty response on attempt 1, retrying..." >&2
-    else
-      tmp=$(mktemp) && sed 's/^__EMPTY__$/DeepSeek R1 returned empty after 2 attempts. Check .log for raw response./' "$DEEPSEEK_OUT" > "$tmp" && mv "$tmp" "$DEEPSEEK_OUT"
-    fi
-  done
-}
-
-# --- OpenAI ---
+# --- OpenAI (gpt-5.3-codex via Responses API) ---
 call_openai() {
   if [[ -z "${OPENAI_API_KEY:-}" ]]; then
     echo "SKIPPED: No OPENAI_API_KEY" > "$OPENAI_OUT"
@@ -212,22 +167,29 @@ call_openai() {
   fi
   local attempt
   for attempt in 1 2; do
-    curl "${CURL_OPTS[@]}" https://api.openai.com/v1/chat/completions \
+    curl "${CURL_OPTS[@]}" https://api.openai.com/v1/responses \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $OPENAI_API_KEY" \
       -d "{
-        \"model\": \"o4-mini\",
-        \"messages\": [
+        \"model\": \"gpt-5.3-codex\",
+        \"input\": [
           {\"role\": \"developer\", \"content\": $SYSTEM_JSON},
           {\"role\": \"user\", \"content\": $USER_JSON}
         ],
-        \"max_completion_tokens\": 2048
+        \"max_output_tokens\": 8192,
+        \"reasoning\": {\"effort\": \"medium\"}
       }" | python3 -c "
 import json, sys
 try:
     r = json.load(sys.stdin)
-    content = r['choices'][0]['message']['content']
-    if content and content.strip():
+    parts = []
+    for item in r.get('output', []):
+        if item.get('type') == 'message':
+            for c in item.get('content', []):
+                if c.get('type') == 'output_text' and c.get('text'):
+                    parts.append(c['text'])
+    content = '\n'.join(parts).strip()
+    if content:
         print(content)
     else:
         print('__EMPTY__')
@@ -243,7 +205,7 @@ except Exception as e:
     if [[ $attempt -eq 1 ]]; then
       echo "  [OpenAI] Empty response on attempt 1, retrying..." >&2
     else
-      tmp=$(mktemp) && sed 's/^__EMPTY__$/OpenAI o4-mini returned empty after 2 attempts. Check .log for raw response./' "$OPENAI_OUT" > "$tmp" && mv "$tmp" "$OPENAI_OUT"
+      tmp=$(mktemp) && sed 's/^__EMPTY__$/OpenAI gpt-5.3-codex returned empty after 2 attempts. Check .log for raw response./' "$OPENAI_OUT" > "$tmp" && mv "$tmp" "$OPENAI_OUT"
     fi
   done
 }
@@ -256,19 +218,29 @@ call_gemini() {
   fi
   local attempt
   for attempt in 1 2; do
-    curl "${CURL_OPTS[@]}" "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" \
+    curl "${CURL_OPTS[@]}" "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent" \
       -H "Content-Type: application/json" \
       -H "x-goog-api-key: $GEMINI_API_KEY" \
       -d "{
         \"system_instruction\": {\"parts\": [{\"text\": $SYSTEM_JSON}]},
         \"contents\": [{\"parts\": [{\"text\": $USER_JSON}]}],
-        \"generationConfig\": {\"maxOutputTokens\": 2048}
+        \"generationConfig\": {
+          \"maxOutputTokens\": 8192,
+          \"thinkingConfig\": {\"thinkingBudget\": -1, \"includeThoughts\": false}
+        }
       }" | python3 -c "
 import json, sys
 try:
     r = json.load(sys.stdin)
-    content = r['candidates'][0]['content']['parts'][0]['text']
-    if content and content.strip():
+    parts = []
+    for p in r['candidates'][0].get('content', {}).get('parts', []):
+        # Skip thought parts (when includeThoughts is true); keep answer text
+        if p.get('thought'):
+            continue
+        if p.get('text'):
+            parts.append(p['text'])
+    content = '\n'.join(parts).strip()
+    if content:
         print(content)
     else:
         print('__EMPTY__')
@@ -284,34 +256,28 @@ except Exception as e:
     if [[ $attempt -eq 1 ]]; then
       echo "  [Gemini] Empty response on attempt 1, retrying..." >&2
     else
-      tmp=$(mktemp) && sed 's/^__EMPTY__$/Gemini 2.5 Flash returned empty after 2 attempts. Check .log for raw response./' "$GEMINI_OUT" > "$tmp" && mv "$tmp" "$GEMINI_OUT"
+      tmp=$(mktemp) && sed 's/^__EMPTY__$/Gemini 2.5 Pro returned empty after 2 attempts. Check .log for raw response./' "$GEMINI_OUT" > "$tmp" && mv "$tmp" "$GEMINI_OUT"
     fi
   done
 }
 
 echo ""
-echo "Sending to DeepSeek R1, OpenAI o4-mini, and Gemini 2.5 Flash in parallel..."
+echo "Sending to OpenAI gpt-5.3-codex (reasoning=medium) and Gemini 2.5 Pro (thinking) in parallel..."
 echo ""
 
-# Run all three in parallel
-call_deepseek &
+# Run both in parallel
 call_openai &
 call_gemini &
 wait
 
 # Output results
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "DEEPSEEK R1 REVIEW"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-cat "$DEEPSEEK_OUT"
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "OPENAI o4-mini REVIEW"
+echo "OPENAI gpt-5.3-codex REVIEW"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cat "$OPENAI_OUT"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "GEMINI 2.5 FLASH REVIEW"
+echo "GEMINI 2.5 PRO REVIEW"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cat "$GEMINI_OUT"
 echo ""

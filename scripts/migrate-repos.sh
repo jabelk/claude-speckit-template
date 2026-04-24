@@ -243,7 +243,7 @@ COMMIT_EOF
 ## Summary
 - Replace frozen `.claude/commands/speckit.*.md` with spec-kit v0.5 skills
 - Add `/feature` skill — 6-phase workflow with Phase 4.5 multi-model review gate
-- Add `/review-plan` skill + `scripts/review-plan.sh` (DeepSeek R1, OpenAI o4-mini, Gemini 2.5 Flash)
+- Add `/review-plan` skill + `scripts/review-plan.sh` (DeepSeek R1, OpenAI gpt-5.3-codex, Gemini 2.5 Pro)
 - Add `setup.sh` for future spec-kit dependency upgrades
 - Update all command references from dot to hyphen notation
 

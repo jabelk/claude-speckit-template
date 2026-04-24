@@ -7,7 +7,6 @@ metadata:
   author: "jabelk"
   source: "claude-code-template"
 user-invocable: true
-disable-model-invocation: true
 ---
 
 # Start Next Feature
@@ -49,7 +48,7 @@ Present findings to user. This step has repeatedly prevented bad architectural d
 
 ## Phase 4.5: Review (do NOT skip this)
 
-1. Run `/review-plan` — sends spec + plan to OpenAI o4-mini and Gemini 2.5 Flash for independent peer review
+1. Run `/review-plan` — sends spec + plan to OpenAI gpt-5.3-codex and Gemini 2.5 Pro for independent peer review
 2. The script outputs raw text from each model — you must read the output and interpret the GREEN/YELLOW/RED ratings manually
 3. Present all three reviews to the user with a summary
 4. If any RED: strongly recommend fixes; proceed only with explicit user approval

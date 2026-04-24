@@ -103,7 +103,7 @@ This project uses [GitHub Spec Kit](https://github.com/github/spec-kit). The wor
 2. `/speckit-specify` — Write the specification for a feature
 3. `/speckit-plan` — Create the implementation plan
 4. `/speckit-tasks` — Break the plan into ordered tasks
-5. `/review-plan` — Multi-model peer review (OpenAI o4-mini, Gemini 2.5 Flash)
+5. `/review-plan` — Multi-model peer review (OpenAI gpt-5.3-codex, Gemini 2.5 Pro)
 6. `/speckit-implement` — Execute tasks
 
 **Use `/feature` to run the full workflow end-to-end** — it orchestrates all steps in order with research and review gates.
