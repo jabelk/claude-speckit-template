@@ -14,15 +14,32 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
 | `.claude/skills/review-plan/` | Custom | Multi-model peer review gate |
 | `scripts/review-plan.sh` | Custom | Sends plans to OpenAI gpt-5.3-codex, Gemini 2.5 Pro for peer review |
 | `scripts/install_office_skills.sh` | Custom | Installs Anthropic's official `docx` / `pptx` / `xlsx` skills so Claude Code can generate Word, PowerPoint, and Excel artifacts directly. Re-fetches from upstream (skills are non-redistributable per their LICENSE.txt). |
+| `scripts/newproject.zsh-function` | Custom | Sourceable shell function for creating new repos from this template. Wraps `gh repo create --template` + runs `setup.sh` automatically. Source from your `~/.zshrc` to get a `newproject my-project` command. |
 | `setup.sh` | Template | Bootstrap script — installs/upgrades spec-kit dependency, runs Office skills install, updates `.gitignore` |
 
 ## Quick Start
 
-1. **Create your project** — one command:
+1. **Create your project** — pick the path that fits your workflow:
+
+   **(a) One-off, no setup required**:
    ```bash
    curl -sL https://raw.githubusercontent.com/jabelk/claude-speckit-template/main/scripts/new-project.sh | bash -s my-project
    ```
-   This clones the template, strips git history, inits a fresh repo, and runs `setup.sh` to pull latest spec-kit — all in one step.
+   Clones the template, strips git history, inits a fresh repo, runs `setup.sh`. Good for trying once.
+
+   **(b) Daily-driver shell command** (recommended if you create projects often):
+   ```bash
+   # One-time setup — clone the template locally and source the helper from zshrc:
+   git clone https://github.com/jabelk/claude-speckit-template.git ~/dev/projects/claude-speckit-template
+   echo '[ -f "$HOME/dev/projects/claude-speckit-template/scripts/newproject.zsh-function" ] && source "$HOME/dev/projects/claude-speckit-template/scripts/newproject.zsh-function"' >> ~/.zshrc
+   source ~/.zshrc
+
+   # Then any time:
+   newproject my-project          # private GitHub repo via gh, clone, runs setup.sh, cds in
+   newproject my-project --public  # or override visibility
+   newproject my-project --no-setup  # skip setup.sh
+   ```
+   This uses `gh repo create --template`, so the new repo lands on your GitHub account immediately (private by default).
 3. **Edit `CLAUDE.md`** — replace `{{PLACEHOLDERS}}` with your project details:
    ```
    {{PROJECT_NAME}}        → Your project name

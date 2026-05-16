@@ -1,0 +1,92 @@
+# newproject.zsh-function
+#
+# Defines a `newproject` shell function that bootstraps a new private GitHub
+# repo from this template, clones it, and runs ./setup.sh (which pulls latest
+# spec-kit and installs the Office skills).
+#
+# How to use this file:
+#   1. Clone claude-speckit-template somewhere local, e.g.:
+#        git clone https://github.com/jabelk/claude-speckit-template.git \
+#          ~/dev/projects/claude-speckit-template
+#   2. Add this to your ~/.zshrc (or ~/.bashrc with `bash` instead of `zsh`):
+#        if [ -f "$HOME/dev/projects/claude-speckit-template/scripts/newproject.zsh-function" ]; then
+#          source "$HOME/dev/projects/claude-speckit-template/scripts/newproject.zsh-function"
+#        fi
+#   3. `source ~/.zshrc`. Then: `newproject my-project`.
+#
+# Override the template if you want a fork:
+#   export NEWPROJECT_TEMPLATE="your-user/your-fork"
+#
+# Override the default visibility (defaults to --private):
+#   export NEWPROJECT_VISIBILITY="--public"  # or "--internal"
+
+newproject() {
+  emulate -L sh 2>/dev/null  # zsh: behave like POSIX sh inside this function
+
+  if [ -z "${1:-}" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    cat <<'USAGE'
+Usage: newproject <project-name> [--public|--private|--internal] [--no-setup]
+
+Creates a new GitHub repo from the claude-speckit-template, clones it,
+cds into it, and runs ./setup.sh by default.
+
+Options:
+  --public | --private | --internal   Visibility (default: --private,
+                                       or $NEWPROJECT_VISIBILITY if set)
+  --no-setup                          Skip ./setup.sh after clone
+
+Environment:
+  NEWPROJECT_TEMPLATE   GitHub template repo (default: jabelk/claude-speckit-template)
+  NEWPROJECT_VISIBILITY Visibility flag (default: --private)
+USAGE
+    return 0
+  fi
+
+  # Required tools
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "newproject: gh CLI required. Install: brew install gh" >&2
+    return 127
+  fi
+
+  local project="$1"; shift
+  local template="${NEWPROJECT_TEMPLATE:-jabelk/claude-speckit-template}"
+  local visibility="${NEWPROJECT_VISIBILITY:---private}"
+  local run_setup=1
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --public|--private|--internal) visibility="$1"; shift ;;
+      --no-setup) run_setup=0; shift ;;
+      *) echo "newproject: unknown option: $1" >&2; return 64 ;;
+    esac
+  done
+
+  echo "→ Creating $project from $template ($visibility)..."
+  if ! gh repo create "$project" --template "$template" "$visibility" --clone; then
+    echo "newproject: gh repo create failed." >&2
+    return 1
+  fi
+
+  cd "$project" || {
+    echo "newproject: failed to cd into $project — repo created on GitHub but not cloned locally?" >&2
+    return 1
+  }
+
+  if [ "$run_setup" -eq 1 ] && [ -x ./setup.sh ]; then
+    echo ""
+    echo "→ Running ./setup.sh (pulls latest spec-kit + installs Office skills docx/pptx/xlsx)..."
+    if ! ./setup.sh; then
+      echo "newproject: ./setup.sh failed. Re-run manually when ready." >&2
+    fi
+  elif [ "$run_setup" -eq 1 ]; then
+    echo "newproject: no executable ./setup.sh found; skipping bootstrap." >&2
+  fi
+
+  echo ""
+  echo "✓ Done. Next steps:"
+  echo "    1. Edit CLAUDE.md — replace {{PLACEHOLDERS}}"
+  echo "    2. Run /speckit.constitution to set project principles"
+  echo "    3. Run /feature to start your first feature"
+  echo ""
+  echo "  (If you want the new docx/pptx/xlsx skills active in this session, restart Claude Code.)"
+}
