@@ -13,7 +13,8 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
 | `.claude/skills/feature/` | Custom | Full workflow orchestrator (orient, research, specify, plan, review, implement, ship) |
 | `.claude/skills/review-plan/` | Custom | Multi-model peer review gate |
 | `scripts/review-plan.sh` | Custom | Sends plans to OpenAI gpt-5.3-codex, Gemini 2.5 Pro for peer review |
-| `setup.sh` | Template | Bootstrap script — installs/upgrades spec-kit dependency |
+| `scripts/install_office_skills.sh` | Custom | Installs Anthropic's official `docx` / `pptx` / `xlsx` skills so Claude Code can generate Word, PowerPoint, and Excel artifacts directly. Re-fetches from upstream (skills are non-redistributable per their LICENSE.txt). |
+| `setup.sh` | Template | Bootstrap script — installs/upgrades spec-kit dependency, runs Office skills install, updates `.gitignore` |
 
 ## Quick Start
 
@@ -84,6 +85,32 @@ This template uses **GitHub Issues as the primary tracker** — not parallel mar
 - Use milestones for release grouping
 - Convert spec tasks to issues with `/speckit-taskstoissues`
 - Close issues via PR references (`Closes #N`)
+
+## Office Artifacts (Word / PowerPoint / Excel)
+
+`setup.sh` installs Anthropic's official `docx`, `pptx`, and `xlsx` skills into `.claude/skills/`. After setup, Claude Code can generate Office files directly when asked — useful for status reports, mgmt decks, spreadsheets that summarize work.
+
+**How to use**:
+
+```
+You: "Generate a status report Word doc from the last 5 commits."
+You: "Build me a 10-slide deck explaining this feature for non-technical stakeholders."
+You: "Make an Excel workbook with the test-coverage numbers from the last 3 sprints."
+```
+
+The skills auto-invoke based on keywords (`Word doc`, `.docx`, `slides`, `deck`, `presentation`, `spreadsheet`, `.xlsx`, etc.).
+
+**Quality**: the skills include validation patterns + a fix-and-verify QA loop that mirrors claude.ai's output quality. For visual QA on slides, install LibreOffice:
+
+```bash
+brew install --cask libreoffice
+```
+
+Without LibreOffice, content QA still works; visual QA (slide thumbnails, layout checks) is disabled.
+
+**Why the skills aren't vendored**: Anthropic's `LICENSE.txt` for these skills explicitly prohibits redistribution and retaining copies outside Anthropic Services. The compliant pattern is to re-fetch them from `github.com/anthropics/skills` at install time. `setup.sh` does this; `.gitignore` excludes `.claude/skills/{docx,pptx,xlsx}/` so they never get committed.
+
+**Re-running**: `scripts/install_office_skills.sh` is re-runnable; it refreshes the cached upstream clone and reinstalls. Worth running occasionally to pick up skill updates from Anthropic.
 
 ## Customization
 

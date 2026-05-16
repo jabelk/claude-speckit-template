@@ -59,6 +59,43 @@ cp -r "$BACKUP_DIR/review-plan" "$REPO_ROOT/.claude/skills/review-plan" 2>/dev/n
 cp -r "$BACKUP_DIR/scripts" "$REPO_ROOT/scripts" 2>/dev/null || echo "Warning: failed to restore scripts/ from backup" >&2
 rm -rf "$BACKUP_DIR"
 
+# Install Anthropic's official Office skills (docx, pptx, xlsx) for generating
+# Word / PowerPoint / Excel artifacts (status reports, decks for mgmt, etc.)
+# directly from Claude Code. The skills are non-redistributable per their LICENSE.txt,
+# so we never vendor them — install_office_skills.sh re-fetches from upstream and
+# adds .claude/skills/{docx,pptx,xlsx} to .gitignore on first run.
+# Non-fatal: if install fails (no network, missing deps), the rest of setup still completes.
+echo ""
+echo "Installing Anthropic Office skills (docx / pptx / xlsx)..."
+if [ -x "$REPO_ROOT/scripts/install_office_skills.sh" ]; then
+  if ! "$REPO_ROOT/scripts/install_office_skills.sh"; then
+    echo "Warning: Office skills install failed. Re-run scripts/install_office_skills.sh manually when ready." >&2
+  fi
+else
+  echo "Warning: scripts/install_office_skills.sh missing or not executable; skipping Office skills install." >&2
+fi
+
+# Ensure .gitignore excludes the non-redistributable skill content + generated Office artifacts.
+GI="$REPO_ROOT/.gitignore"
+touch "$GI"
+add_gitignore_line() {
+  local line="$1"
+  grep -Fxq "$line" "$GI" || echo "$line" >> "$GI"
+}
+if ! grep -q "Anthropic Office skills" "$GI" 2>/dev/null; then
+  printf '\n# Anthropic Office skills — non-redistributable per their LICENSE.txt.\n# Re-installed at setup time via scripts/install_office_skills.sh.\n' >> "$GI"
+  add_gitignore_line ".claude/skills/docx/"
+  add_gitignore_line ".claude/skills/pptx/"
+  add_gitignore_line ".claude/skills/xlsx/"
+  printf '\n# Generated Office artifacts — hand-off only, never commit.\n' >> "$GI"
+  add_gitignore_line "*.docx"
+  add_gitignore_line "*.pptx"
+  add_gitignore_line "*.xlsx"
+  add_gitignore_line "*.pdf"
+  add_gitignore_line "~\$*"
+  echo "Added Office skills + artifacts entries to .gitignore."
+fi
+
 echo ""
 echo "=== Setup Complete ==="
 echo ""
@@ -66,7 +103,13 @@ echo "Next steps:"
 echo "  1. Edit CLAUDE.md — replace {{PLACEHOLDERS}} with your project details"
 echo "  2. Run /speckit-constitution to establish project principles"
 echo "  3. Run /feature to start your first feature"
+echo "  4. (Optional) Restart Claude Code so the new docx/pptx/xlsx skills appear in the skill list"
 echo ""
 echo "For multi-model plan review, add API keys to .env:"
 echo "  OPENAI_API_KEY=..."
 echo "  GEMINI_API_KEY=..."
+echo ""
+echo "For Office artifacts (Word / PowerPoint / Excel):"
+echo "  - Ask Claude to 'create a Word doc' or 'build a slide deck' — the skills auto-invoke."
+echo "  - For visual QA loop: brew install --cask libreoffice (optional; without it,"
+echo "    QA falls back to content-only checks)."
