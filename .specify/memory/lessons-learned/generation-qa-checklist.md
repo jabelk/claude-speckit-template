@@ -98,8 +98,15 @@ This checklist consolidates recurring failure modes when Claude generates artifa
   pdftoppm -jpeg -r 100 /tmp/out.pdf /tmp/slide-imgs/slide
   ```
 - [ ] **USE A SUBAGENT for visual inspection** — even for 2-3 slides. You'll see what you expect, not what's there. Fresh eyes catch overlaps, footer collisions, text overflow. (This is the official Anthropic `pptx` skill's own discipline.)
-- [ ] **Specifically watch for**: text overlapping shapes; text running through decorative lines; footer collisions with content; columns of uneven height; insufficient margins (<0.5"); low-contrast text; text wrapping mid-number or mid-name; leftover placeholder content from templates.
+- [ ] **Specifically watch for**: text overlapping shapes; text running through decorative lines; footer collisions with content; columns of uneven height; insufficient margins (<0.5"); low-contrast text; text wrapping mid-number, mid-word, or mid-hyphenated-title; leftover placeholder content from templates.
 - [ ] **At least one fix-and-verify cycle** — never declare done on the first render. Real example: a 22-slide deck had 5 layout bugs on first pass; second pass after fixes was clean.
+
+### 7a. Runtime gotchas when invoking the build (sub-checklist)
+
+- [ ] **`NODE_PATH=$(npm root -g)` set** when running ad-hoc Node scripts that `require()` globally-installed `docx` or `pptxgenjs`. Modern Node (≥ 22) doesn't search the global prefix from arbitrary cwd by default.
+- [ ] **ES-module projects need `.cjs`**. If the target project's `package.json` has `"type": "module"` (most modern SvelteKit, Next.js, Vite projects), name the build script `build_*.cjs` — not `.js` — or write it with ESM `import` syntax. Otherwise `require("pptxgenjs")` throws `ReferenceError: require is not defined in ES module scope`.
+- [ ] **`soffice` first-run dialogs on macOS** — Java JRE prompt, etc. Run interactively once before relying in scripts.
+- [ ] **`python3.13` explicitly**, not `python3.14` (broken pyexpat on macOS Homebrew at time of writing) — only matters if using `python-docx` / `python-pptx` / `markitdown`.
 
 ---
 
