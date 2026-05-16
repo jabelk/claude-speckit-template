@@ -65,10 +65,33 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
 
 ## Prerequisites
 
+### Required for the spec-kit workflow
+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (or Claude Code desktop/web)
 - [Git](https://git-scm.com/)
-- [GitHub CLI](https://cli.github.com/) (`gh`)
-- [uv](https://docs.astral.sh/uv/) (Python package manager, for spec-kit CLI)
+- [GitHub CLI](https://cli.github.com/) (`gh`) — needed by `newproject`
+- [uv](https://docs.astral.sh/uv/) (Python package manager, for the spec-kit CLI)
+
+### Required additionally for the Office skills (`setup.sh` checks for these)
+
+- **Node.js + npm** — used by the `docx-js` and `pptxgenjs` libraries the skills run
+- **Python 3.13** — **NOT 3.14** (see Gotchas)
+- **pandoc** — used by the `docx` skill to read Word docs
+
+### Optional (enables the visual QA loop on slides + Word docs)
+
+- **LibreOffice** (`brew install --cask libreoffice`) — for rendering `.pptx`/`.docx` → PDF
+- **poppler** (`brew install poppler`) — provides `pdftoppm` to convert the PDFs to JPEG thumbnails
+
+Without LibreOffice + poppler, the skills still generate Office files correctly; you just lose the "render to images and visually QA" loop. Content-only QA (extract text, check fidelity) still works.
+
+### macOS one-shot install
+
+```bash
+brew install gh node pandoc python@3.13 poppler
+brew install --cask libreoffice
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
 ## Workflow
 
@@ -107,7 +130,7 @@ This template uses **GitHub Issues as the primary tracker** — not parallel mar
 
 `setup.sh` installs Anthropic's official `docx`, `pptx`, and `xlsx` skills into `.claude/skills/`. After setup, Claude Code can generate Office files directly when asked — useful for status reports, mgmt decks, spreadsheets that summarize work.
 
-**How to use**:
+### How to use
 
 ```
 You: "Generate a status report Word doc from the last 5 commits."
@@ -117,17 +140,59 @@ You: "Make an Excel workbook with the test-coverage numbers from the last 3 spri
 
 The skills auto-invoke based on keywords (`Word doc`, `.docx`, `slides`, `deck`, `presentation`, `spreadsheet`, `.xlsx`, etc.).
 
-**Quality**: the skills include validation patterns + a fix-and-verify QA loop that mirrors claude.ai's output quality. For visual QA on slides, install LibreOffice:
+### What the install actually does
 
-```bash
-brew install --cask libreoffice
-```
+`setup.sh` calls `scripts/install_office_skills.sh`, which:
 
-Without LibreOffice, content QA still works; visual QA (slide thumbnails, layout checks) is disabled.
+1. **Caches the upstream skills repo** at `~/.cache/anthropic-skills` (clones first time, `git fetch` + `reset --hard origin/HEAD` on re-run).
+2. **Copies the requested skills** (`docx`, `pptx`, `xlsx` by default) from the cache into `.claude/skills/` in your project.
+3. **Verifies runtime tools** — `node`, `npm`, `python3.13`, `pandoc` required; `soffice` + `pdftoppm` optional (for the visual QA loop).
+4. **Installs npm globals** `docx@^9` and `pptxgenjs@^4` if missing — these are the libraries the skills `require()` at runtime.
+5. **Updates `.gitignore`** — adds `.claude/skills/{docx,pptx,xlsx}/` (non-redistributable, see below) plus `*.docx`, `*.pptx`, `*.xlsx`, `*.pdf`, `~$*` (generated artifacts are hand-off only).
 
-**Why the skills aren't vendored**: Anthropic's `LICENSE.txt` for these skills explicitly prohibits redistribution and retaining copies outside Anthropic Services. The compliant pattern is to re-fetch them from `github.com/anthropics/skills` at install time. `setup.sh` does this; `.gitignore` excludes `.claude/skills/{docx,pptx,xlsx}/` so they never get committed.
+Run it standalone at any time to refresh: `./scripts/install_office_skills.sh`. Re-runnable, idempotent.
 
-**Re-running**: `scripts/install_office_skills.sh` is re-runnable; it refreshes the cached upstream clone and reinstalls. Worth running occasionally to pick up skill updates from Anthropic.
+### Why the skills aren't vendored
+
+Anthropic's `LICENSE.txt` for each skill (you can read it at `.claude/skills/docx/LICENSE.txt` after install) explicitly prohibits:
+
+- Extracting or retaining copies outside Anthropic Services
+- Reproducing, copying, or distributing the materials
+- Creating derivative works
+- Sublicensing or transferring to third parties
+
+The compliant pattern is therefore: **re-fetch from `github.com/anthropics/skills` at install time, never commit a copy**. `setup.sh` does this; `.gitignore` makes sure you can't accidentally `git add` them. Same goes for any fork of this template — don't vendor the skills.
+
+### Gotchas (real ones we hit during validation)
+
+- **Python 3.14 has a broken `pyexpat`** on macOS Homebrew at the time of writing — `python3.14 -c "import xml.etree.ElementTree"` fails with `Symbol not found: _XML_SetAllocTrackerActivationThreshold`. This breaks `python-pptx`, `python-docx`, `markitdown`, etc. **Use `python3.13` explicitly** (`brew install python@3.13`). The install script checks for `python3.13` specifically.
+- **Node 25 module resolution**: globally-installed npm packages don't resolve from arbitrary `cwd` without `NODE_PATH`. If you write your own Node script that uses these libraries, set `NODE_PATH=$(npm root -g)` when running:
+  ```bash
+  NODE_PATH=$(npm root -g) node my-build-script.js
+  ```
+  (The skills handle this internally when invoked via Claude — only matters for hand-written scripts.)
+- **`gh repo create --template --internal` requires an org**. Personal accounts only support `--public` and `--private`. The `newproject` helper defaults to `--private`.
+- **macOS PEP 668 / `--break-system-packages`**: if you try `pip3 install python-pptx` directly, macOS-Python refuses by design. Use `uv` or `pipx`, or pass `--break-system-packages` knowingly. The Office skills mostly use the Node libraries, so this rarely bites unless you also want `markitdown` for content extraction.
+- **LibreOffice is ~300MB**. Install is via `brew install --cask libreoffice` and takes 1–3 min on a fast connection. Worth it if you want the visual QA loop; skippable if you just want to generate files and look at them yourself in Word.
+- **Skills appear mid-session**: if you `./setup.sh` while Claude Code is already running, the new skills surface in the available-skills list immediately (no restart needed). But if anything looks off, restart Claude Code to be safe.
+- **`soffice` first-run** opens a couple of dialogs on macOS (Java JRE prompt, etc.). Run `soffice --headless --convert-to pdf /tmp/throwaway.pptx` once interactively before relying on it in scripts.
+
+### Validation evidence
+
+End-to-end validated in a real project (the [Grace Church Reno teaching workspace](https://github.com/jabelk/grace-church-reno-teaching) at sister-repo `~/dev/projects/grace-church-reno-teaching`):
+
+1. Installed both skills (`docx` + `pptx`) into the project via this script.
+2. Invoked the `pptx` skill via Claude Code's Skill tool to build a 22-slide deck.
+3. Skill auto-loaded `pptxgenjs`, wrote a `build_slides.js` in the project's scratch space, ran it, produced a `.pptx`.
+4. Ran the skill's full QA loop:
+   - **Content QA** via raw XML extraction (`unzip` the `.pptx` → grep `<a:t>` text nodes — works on stdlib Python, no extra deps).
+   - **Visual QA** via `soffice → PDF → pdftoppm → JPEG → general-purpose subagent inspection` (the skill explicitly requires "USE SUBAGENTS — even for 2-3 slides").
+   - First pass found 5 layout bugs (closer lines colliding with footers on 4 slides + a mid-number wrap on a stat callout). Fix-and-verify cycle: regenerated, re-rendered, re-inspected. Second pass clean.
+5. Output quality matched what claude.ai's web cowork produces — same libraries (`docx-js`, `pptxgenjs`), same skill content. The platform difference is just skill auto-loading + sandbox iteration ergonomics, not capability.
+
+### Re-running
+
+`scripts/install_office_skills.sh` is re-runnable; it refreshes the cached upstream clone and reinstalls. Worth running occasionally to pick up skill updates from Anthropic.
 
 ## Customization
 
