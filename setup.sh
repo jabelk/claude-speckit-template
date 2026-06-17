@@ -50,13 +50,22 @@ cp -r "$REPO_ROOT/scripts" "$BACKUP_DIR/scripts" 2>/dev/null || true
 
 # Run specify init to pull latest spec-kit
 echo "Running specify init (pulling latest spec-kit)..."
-specify init --here --ai claude --no-git --force
+specify init --here --integration claude --force
 
-# Restore custom files
+# Restore custom files.
+# Remove the destination first so `cp -r` replaces it instead of nesting a copy
+# inside an existing dir (e.g. .claude/skills/feature/feature). Current spec-kit
+# leaves these custom files in place, so the dest dir exists at restore time.
 echo "Restoring custom skills and scripts..."
-cp -r "$BACKUP_DIR/feature" "$REPO_ROOT/.claude/skills/feature" 2>/dev/null || echo "Warning: failed to restore /feature skill from backup" >&2
-cp -r "$BACKUP_DIR/review-plan" "$REPO_ROOT/.claude/skills/review-plan" 2>/dev/null || echo "Warning: failed to restore /review-plan skill from backup" >&2
-cp -r "$BACKUP_DIR/scripts" "$REPO_ROOT/scripts" 2>/dev/null || echo "Warning: failed to restore scripts/ from backup" >&2
+restore_dir() {
+  local src="$1" dest="$2" label="$3"
+  [ -d "$src" ] || return 0
+  rm -rf "$dest"
+  cp -r "$src" "$dest" 2>/dev/null || echo "Warning: failed to restore $label from backup" >&2
+}
+restore_dir "$BACKUP_DIR/feature" "$REPO_ROOT/.claude/skills/feature" "/feature skill"
+restore_dir "$BACKUP_DIR/review-plan" "$REPO_ROOT/.claude/skills/review-plan" "/review-plan skill"
+restore_dir "$BACKUP_DIR/scripts" "$REPO_ROOT/scripts" "scripts/"
 rm -rf "$BACKUP_DIR"
 
 # Install Anthropic's official Office skills (docx, pptx, xlsx) for generating
