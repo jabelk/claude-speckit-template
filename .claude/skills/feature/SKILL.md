@@ -67,7 +67,14 @@ Present findings to user. This step has repeatedly prevented bad architectural d
 
 ## Phase 6: Ship
 
-1. Self-review the diff for: shell pipeline safety (`pipefail`), API keys in URLs, secrets/PII in external calls, doc consistency
+1. **Self-review the diff — CodeRabbit-style pass.** Walk the diff against these patterns before opening the PR. Each round of CR review costs 10-20 min of user attention — catch these yourself:
+   - **try/except scope**: covers *all* error-raising paths, including early-return branches (not just the happy path)
+   - **Leaked secrets/URLs in logs**: signed URLs, tokens, API keys, PII in debug/log statements
+   - **Vacuous tests**: tests that pass regardless of the code under test (e.g. `assert True`, assertions on empty response bodies); assert user-visible state, not just request shapes
+   - **Missing edge cases**: empty collections, None/null, timezone boundaries, idempotency on retry paths
+   - **Duplicated magic constants**: same value in two files → extract a helper
+   - **Shell pipeline safety**: `set -euo pipefail` in scripts, API keys in URLs, secrets/PII in external calls
+   - **Doc consistency**: README / CLAUDE.md / specs still match the code
 2. Run tests — all must pass
 3. `git diff --stat` — review, no unintended changes
 4. Create PR against main
