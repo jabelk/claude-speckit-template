@@ -22,7 +22,18 @@ Full workflow from issue triage to implementation. Do NOT skip steps.
 5. Present a summary: "Here's where we are, here's what's open, here's what I'd recommend next"
 6. Wait for user input on which issue(s) to tackle
 
-## Phase 2: Research (do NOT skip this)
+## Phase 2: Re-orient + Research (do NOT skip this)
+
+### Codebase re-orientation (mandatory)
+
+CLAUDE.md, MEMORY.md, and the constitution are curated pointers — they go stale; the code is the source of truth. Before specifying or planning, spawn an Explore agent over the subsystem(s) the feature touches (schema, services, routes, components). Have it report:
+
+- the current data model and existing machinery that overlaps the feature (prior art to reuse)
+- corrections to any assumption stated in the feature request, memory files, or the conversation so far
+
+Feed those corrections into the spec. Never plan from memory files alone — stale architecture claims poison the planning phase.
+
+### Online research
 
 Before specifying or planning, research online:
 - Are there better approaches than the obvious one?
