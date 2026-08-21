@@ -147,8 +147,9 @@ for repo in "${REPOS[@]}"; do
     continue
   }
 
-  # 1. Run specify init to upgrade
-  specify init --here --ai claude --no-git --force 2>/dev/null || {
+  # 1. Run specify init to upgrade (v1 CLI: --integration replaced --ai, and
+  # --no-git was dropped — the old flags made this always fail to the fallback)
+  specify init --here --integration claude --force 2>/dev/null || {
     log_warn "specify init failed, continuing with manual migration"
   }
 

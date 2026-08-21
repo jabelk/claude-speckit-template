@@ -25,13 +25,13 @@ if ! command -v uv &>/dev/null; then
   exit 1
 fi
 
-# Install or upgrade specify CLI
-echo "Installing/upgrading specify CLI..."
-if uv tool list 2>/dev/null | grep -q specify-cli; then
-  uv tool upgrade specify-cli 2>/dev/null || true
-else
-  uv tool install specify-cli --from "git+https://github.com/github/spec-kit.git"
-fi
+# Install the specify CLI, pinned to a known release so every machine vendors
+# the same payload. Unpinned installs track the default branch and ship
+# x.y.z.dev0 builds — that's how a "0.5.0" template ended up alongside a
+# 0.14.x CLI. Bump this ONE variable to upgrade, then review the diff.
+SPECKIT_VERSION="v1.0.1"
+echo "Installing specify CLI ${SPECKIT_VERSION}..."
+uv tool install --force specify-cli --from "git+https://github.com/github/spec-kit.git@${SPECKIT_VERSION}"
 
 echo ""
 
@@ -41,12 +41,44 @@ if ! git rev-parse --is-inside-work-tree &>/dev/null; then
   git init
 fi
 
-# Back up custom files that specify init might overwrite
+# Back up custom files that specify init might overwrite. cp -a preserves
+# permissions (scripts must keep their exec bits through a restore).
 BACKUP_DIR=$(mktemp -d)
 echo "Backing up custom skills and scripts..."
-cp -r "$REPO_ROOT/.claude/skills/feature" "$BACKUP_DIR/feature" 2>/dev/null || true
-cp -r "$REPO_ROOT/.claude/skills/review-plan" "$BACKUP_DIR/review-plan" 2>/dev/null || true
-cp -r "$REPO_ROOT/scripts" "$BACKUP_DIR/scripts" 2>/dev/null || true
+cp -a "$REPO_ROOT/.claude/skills/feature" "$BACKUP_DIR/feature" 2>/dev/null || true
+cp -a "$REPO_ROOT/.claude/skills/review-plan" "$BACKUP_DIR/review-plan" 2>/dev/null || true
+cp -a "$REPO_ROOT/.claude/skills/review-plan-v2" "$BACKUP_DIR/review-plan-v2" 2>/dev/null || true
+cp -a "$REPO_ROOT/scripts" "$BACKUP_DIR/scripts" 2>/dev/null || true
+
+# If specify init dies mid-run, set -e would otherwise skip the restore and
+# leave the tree half-overwritten with the backups stranded in a tmpdir.
+restore_all() {
+  [ -d "$BACKUP_DIR" ] || return 0
+  local any_failed=0
+  for pair in "feature:.claude/skills/feature" \
+              "review-plan:.claude/skills/review-plan" \
+              "review-plan-v2:.claude/skills/review-plan-v2" \
+              "scripts:scripts"; do
+    src="$BACKUP_DIR/${pair%%:*}"; dest="$REPO_ROOT/${pair#*:}"
+    [ -d "$src" ] || continue
+    # Stage-then-swap: never delete the destination until the copy succeeded,
+    # and never delete the backup unless every restore succeeded.
+    stage="${dest}.restore.$$"
+    if cp -a "$src" "$stage" 2>/dev/null && rm -rf "$dest" && mv "$stage" "$dest"; then
+      :
+    else
+      rm -rf "$stage"
+      echo "Warning: failed to restore $dest from backup" >&2
+      any_failed=1
+    fi
+  done
+  if [ "$any_failed" -ne 0 ]; then
+    echo "ERROR: backups preserved at $BACKUP_DIR — restore by hand" >&2
+  else
+    rm -rf "$BACKUP_DIR"
+  fi
+}
+trap restore_all EXIT
 
 # Run specify init to pull latest spec-kit
 echo "Running specify init (pulling latest spec-kit)..."
@@ -57,16 +89,51 @@ specify init --here --integration claude --force
 # inside an existing dir (e.g. .claude/skills/feature/feature). Current spec-kit
 # leaves these custom files in place, so the dest dir exists at restore time.
 echo "Restoring custom skills and scripts..."
+# Stage-then-swap: the destination is only replaced after the staged copy
+# succeeds, so a failed cp leaves both the destination and the backup intact.
+restore_failed=0
 restore_dir() {
-  local src="$1" dest="$2" label="$3"
+  local src="$1" dest="$2" label="$3" stage
   [ -d "$src" ] || return 0
-  rm -rf "$dest"
-  cp -r "$src" "$dest" 2>/dev/null || echo "Warning: failed to restore $label from backup" >&2
+  stage="${dest}.restore.$$"
+  if cp -a "$src" "$stage" 2>/dev/null && rm -rf "$dest" && mv "$stage" "$dest"; then
+    return 0
+  fi
+  rm -rf "$stage"
+  echo "Warning: failed to restore $label from backup" >&2
+  restore_failed=1
 }
 restore_dir "$BACKUP_DIR/feature" "$REPO_ROOT/.claude/skills/feature" "/feature skill"
 restore_dir "$BACKUP_DIR/review-plan" "$REPO_ROOT/.claude/skills/review-plan" "/review-plan skill"
+restore_dir "$BACKUP_DIR/review-plan-v2" "$REPO_ROOT/.claude/skills/review-plan-v2" "/review-plan-v2 skill"
 restore_dir "$BACKUP_DIR/scripts" "$REPO_ROOT/scripts" "scripts/"
+if [ "$restore_failed" -ne 0 ]; then
+  echo "ERROR: restoration failed for one or more customs — backups preserved at $BACKUP_DIR" >&2
+  trap - EXIT
+  exit 1
+fi
 rm -rf "$BACKUP_DIR"
+
+# Re-apply fleet drift: upstream ships `disable-model-invocation: false`, but
+# every workflow-shaped skill in this fleet is an explicit slash command only —
+# auto-firing /speckit-specify mid-conversation is a real failure mode. specify
+# init resets the flag on every re-vendor, so it is re-applied here rather than
+# trusted to memory.
+echo "Re-applying disable-model-invocation: true to speckit skills..."
+command -v perl >/dev/null || { echo "ERROR: perl required for drift re-apply" >&2; exit 1; }
+drift_failed=0
+for f in "$REPO_ROOT"/.claude/skills/speckit-*/SKILL.md; do
+  [ -f "$f" ] || continue
+  perl -pi -e 's/^disable-model-invocation: false$/disable-model-invocation: true/' "$f"
+  # Fail LOUDLY if the end state is wrong (key renamed upstream, format drift):
+  # a re-apply that silently does nothing re-enables auto-firing skills, which
+  # is the exact failure this step exists to prevent.
+  if ! grep -q '^disable-model-invocation: true$' "$f"; then
+    echo "ERROR: $f lacks 'disable-model-invocation: true' after re-apply — upstream format changed; fix before shipping" >&2
+    drift_failed=1
+  fi
+done
+[ "$drift_failed" -eq 0 ] || exit 1
 
 # Install Anthropic's official Office skills (docx, pptx, xlsx) for generating
 # Word / PowerPoint / Excel artifacts (status reports, decks for mgmt, etc.)

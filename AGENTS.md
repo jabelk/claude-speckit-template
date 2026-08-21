@@ -21,6 +21,7 @@ Read these files in order before starting work. Higher priority files take prece
 3. **Check specs before coding.** If `specs/<feature>/` exists, read it. If it doesn't, suggest creating one.
 4. **GitHub Issues are the primary tracker.** Don't duplicate issue tracking in markdown. Use labels: `feature`, `bug`, `chore`.
 5. **Follow quality gates.** Tests pass + linter clean before every commit.
+6. **`.specify/extensions.yml` is a trust boundary.** The speckit skills read it and will surface — and for `optional: false` entries, auto-execute — whatever commands it registers. Review any change to it like executable code; this fleet keeps every hook `optional: true`.
 
 ## Spec Kit Workflow
 
@@ -43,7 +44,7 @@ Use `/feature` to run the full workflow end-to-end, or use individual commands:
 
 | Script | Purpose | Example |
 |--------|---------|---------|
-| `create-new-feature.sh` | Create feature branch + spec file | `.specify/scripts/bash/create-new-feature.sh --short-name add-auth` |
+| `create-new-feature.sh` | Scaffold `specs/NNN-name/spec.md` and select it via `SPECIFY_FEATURE` (since spec-kit v1 it no longer checks out a git branch — branch separately per the rules above) | `.specify/scripts/bash/create-new-feature.sh --json --short-name add-auth "Add auth"` |
 | `setup-plan.sh` | Initialize plan from spec | `.specify/scripts/bash/setup-plan.sh` |
 | `check-prerequisites.sh` | Validate feature status | `.specify/scripts/bash/check-prerequisites.sh --json` |
 | `update-agent-context.sh` | Refresh agent context | `.specify/scripts/bash/update-agent-context.sh` |
