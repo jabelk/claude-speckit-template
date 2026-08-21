@@ -54,16 +54,29 @@ cp -a "$REPO_ROOT/scripts" "$BACKUP_DIR/scripts" 2>/dev/null || true
 # leave the tree half-overwritten with the backups stranded in a tmpdir.
 restore_all() {
   [ -d "$BACKUP_DIR" ] || return 0
+  local any_failed=0
   for pair in "feature:.claude/skills/feature" \
               "review-plan:.claude/skills/review-plan" \
               "review-plan-v2:.claude/skills/review-plan-v2" \
               "scripts:scripts"; do
     src="$BACKUP_DIR/${pair%%:*}"; dest="$REPO_ROOT/${pair#*:}"
     [ -d "$src" ] || continue
-    rm -rf "$dest"
-    cp -a "$src" "$dest" 2>/dev/null || echo "Warning: failed to restore $dest from backup" >&2
+    # Stage-then-swap: never delete the destination until the copy succeeded,
+    # and never delete the backup unless every restore succeeded.
+    stage="${dest}.restore.$$"
+    if cp -a "$src" "$stage" 2>/dev/null && rm -rf "$dest" && mv "$stage" "$dest"; then
+      :
+    else
+      rm -rf "$stage"
+      echo "Warning: failed to restore $dest from backup" >&2
+      any_failed=1
+    fi
   done
-  rm -rf "$BACKUP_DIR"
+  if [ "$any_failed" -ne 0 ]; then
+    echo "ERROR: backups preserved at $BACKUP_DIR — restore by hand" >&2
+  else
+    rm -rf "$BACKUP_DIR"
+  fi
 }
 trap restore_all EXIT
 
@@ -76,16 +89,29 @@ specify init --here --integration claude --force
 # inside an existing dir (e.g. .claude/skills/feature/feature). Current spec-kit
 # leaves these custom files in place, so the dest dir exists at restore time.
 echo "Restoring custom skills and scripts..."
+# Stage-then-swap: the destination is only replaced after the staged copy
+# succeeds, so a failed cp leaves both the destination and the backup intact.
+restore_failed=0
 restore_dir() {
-  local src="$1" dest="$2" label="$3"
+  local src="$1" dest="$2" label="$3" stage
   [ -d "$src" ] || return 0
-  rm -rf "$dest"
-  cp -a "$src" "$dest" 2>/dev/null || echo "Warning: failed to restore $label from backup" >&2
+  stage="${dest}.restore.$$"
+  if cp -a "$src" "$stage" 2>/dev/null && rm -rf "$dest" && mv "$stage" "$dest"; then
+    return 0
+  fi
+  rm -rf "$stage"
+  echo "Warning: failed to restore $label from backup" >&2
+  restore_failed=1
 }
 restore_dir "$BACKUP_DIR/feature" "$REPO_ROOT/.claude/skills/feature" "/feature skill"
 restore_dir "$BACKUP_DIR/review-plan" "$REPO_ROOT/.claude/skills/review-plan" "/review-plan skill"
 restore_dir "$BACKUP_DIR/review-plan-v2" "$REPO_ROOT/.claude/skills/review-plan-v2" "/review-plan-v2 skill"
 restore_dir "$BACKUP_DIR/scripts" "$REPO_ROOT/scripts" "scripts/"
+if [ "$restore_failed" -ne 0 ]; then
+  echo "ERROR: restoration failed for one or more customs — backups preserved at $BACKUP_DIR" >&2
+  trap - EXIT
+  exit 1
+fi
 rm -rf "$BACKUP_DIR"
 
 # Re-apply fleet drift: upstream ships `disable-model-invocation: false`, but
