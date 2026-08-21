@@ -2,6 +2,8 @@
 
 A reusable project template for [Claude Code](https://claude.ai/claude-code) with [GitHub Spec Kit](https://github.com/github/spec-kit) for spec-driven development and multi-model plan review.
 
+> **Docs live elsewhere.** This repo is the *bootstrap artifact* — the thing you clone to start a project. The architecture guides, spec-driven-development walkthrough, multi-model review docs, and the decision records behind all of it live in **[Sierra-Code-Co/claude-workflows](https://github.com/Sierra-Code-Co/claude-workflows)**. Start there if you want to understand the system; start here if you want a new project.
+
 ## What's Included
 
 | Component | Source | Purpose |
@@ -23,14 +25,14 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
 
    **(a) One-off, no setup required**:
    ```bash
-   curl -sL https://raw.githubusercontent.com/jabelk/claude-speckit-template/main/scripts/new-project.sh | bash -s my-project
+   curl -fsSL https://raw.githubusercontent.com/Sierra-Code-Co/internal-speckit-template/main/scripts/new-project.sh | bash -s my-project
    ```
    Clones the template, strips git history, inits a fresh repo, runs `setup.sh`. Good for trying once.
 
    **(b) Daily-driver shell command** (recommended if you create projects often):
    ```bash
    # One-time setup — clone the template locally and source the helper from zshrc:
-   git clone https://github.com/jabelk/claude-speckit-template.git ~/dev/projects/claude-speckit-template
+   git clone https://github.com/Sierra-Code-Co/internal-speckit-template.git ~/dev/projects/claude-speckit-template
    echo '[ -f "$HOME/dev/projects/claude-speckit-template/scripts/newproject.zsh-function" ] && source "$HOME/dev/projects/claude-speckit-template/scripts/newproject.zsh-function"' >> ~/.zshrc
    source ~/.zshrc
 
