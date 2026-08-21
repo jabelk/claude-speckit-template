@@ -41,13 +41,31 @@ if ! git rev-parse --is-inside-work-tree &>/dev/null; then
   git init
 fi
 
-# Back up custom files that specify init might overwrite
+# Back up custom files that specify init might overwrite. cp -a preserves
+# permissions (scripts must keep their exec bits through a restore).
 BACKUP_DIR=$(mktemp -d)
 echo "Backing up custom skills and scripts..."
-cp -r "$REPO_ROOT/.claude/skills/feature" "$BACKUP_DIR/feature" 2>/dev/null || true
-cp -r "$REPO_ROOT/.claude/skills/review-plan" "$BACKUP_DIR/review-plan" 2>/dev/null || true
-cp -r "$REPO_ROOT/.claude/skills/review-plan-v2" "$BACKUP_DIR/review-plan-v2" 2>/dev/null || true
-cp -r "$REPO_ROOT/scripts" "$BACKUP_DIR/scripts" 2>/dev/null || true
+cp -a "$REPO_ROOT/.claude/skills/feature" "$BACKUP_DIR/feature" 2>/dev/null || true
+cp -a "$REPO_ROOT/.claude/skills/review-plan" "$BACKUP_DIR/review-plan" 2>/dev/null || true
+cp -a "$REPO_ROOT/.claude/skills/review-plan-v2" "$BACKUP_DIR/review-plan-v2" 2>/dev/null || true
+cp -a "$REPO_ROOT/scripts" "$BACKUP_DIR/scripts" 2>/dev/null || true
+
+# If specify init dies mid-run, set -e would otherwise skip the restore and
+# leave the tree half-overwritten with the backups stranded in a tmpdir.
+restore_all() {
+  [ -d "$BACKUP_DIR" ] || return 0
+  for pair in "feature:.claude/skills/feature" \
+              "review-plan:.claude/skills/review-plan" \
+              "review-plan-v2:.claude/skills/review-plan-v2" \
+              "scripts:scripts"; do
+    src="$BACKUP_DIR/${pair%%:*}"; dest="$REPO_ROOT/${pair#*:}"
+    [ -d "$src" ] || continue
+    rm -rf "$dest"
+    cp -a "$src" "$dest" 2>/dev/null || echo "Warning: failed to restore $dest from backup" >&2
+  done
+  rm -rf "$BACKUP_DIR"
+}
+trap restore_all EXIT
 
 # Run specify init to pull latest spec-kit
 echo "Running specify init (pulling latest spec-kit)..."
@@ -62,7 +80,7 @@ restore_dir() {
   local src="$1" dest="$2" label="$3"
   [ -d "$src" ] || return 0
   rm -rf "$dest"
-  cp -r "$src" "$dest" 2>/dev/null || echo "Warning: failed to restore $label from backup" >&2
+  cp -a "$src" "$dest" 2>/dev/null || echo "Warning: failed to restore $label from backup" >&2
 }
 restore_dir "$BACKUP_DIR/feature" "$REPO_ROOT/.claude/skills/feature" "/feature skill"
 restore_dir "$BACKUP_DIR/review-plan" "$REPO_ROOT/.claude/skills/review-plan" "/review-plan skill"
