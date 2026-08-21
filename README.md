@@ -107,7 +107,7 @@ Phase 3: Specify    → /speckit-specify — write the feature spec
 Phase 4: Plan       → /speckit-plan + /speckit-tasks — architecture + task breakdown
 Phase 4.5: Review   → /review-plan — multi-model peer review (GREEN/YELLOW/RED)
 Phase 5: Implement  → /speckit-implement — TDD execution
-Phase 6: Ship       → Tests, PR, merge, deploy
+Phase 6: Ship       → /ship — gates, PR, batched review, merge; promote/verify if the project defines a pipeline
 ```
 
 ## Updating Spec Kit

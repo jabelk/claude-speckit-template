@@ -2,7 +2,7 @@
 name: "ship"
 description: "Ship the current change: CodeRabbit-style self-review, unpiped gates, PR, batched review round, merge, per-project promote/verify. The shipping half of /feature, usable standalone for small fixes."
 argument-hint: "Optionally describe the change being shipped"
-compatibility: "Any git repo; promote/verify steps are read from the project's CLAUDE.md"
+compatibility: "Git repo with a remote, a PR system (GitHub), and CI; promote/verify steps are read from the project's CLAUDE.md (stops at merge if none defined)"
 metadata:
   author: "jabelk"
   source: "claude-code-template"
@@ -37,13 +37,14 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
 ## Phase 2: Gates — unpiped
 
 1. Run the project's lint, format, and test commands as SEPARATE, UNPIPED commands. Pipes mask exit codes — a `cmd | tail` that "passed" has shipped red CI before. If piping is unavoidable, `set -o pipefail` or check `${PIPESTATUS[0]}`. Every gate must exit 0.
-2. `git diff --stat` — confirm no unintended changes.
+2. `git status --short` and `git diff HEAD --stat` — the plain `git diff` misses staged and untracked files; confirm no unintended changes anywhere in the tree.
 3. If a local review CLI is available (`review-plan-v2`, `coderabbit`), run it against the base branch and address its findings now — the PR-side review is the safety net, not the first pass.
 
-## Phase 3: PR
+## Phase 3: Commit + PR
 
-1. Push the branch and open a PR against the project's default branch.
-2. Wait for CI green. Poll on a paced loop; don't block synchronously.
+1. Stage and commit the change (`git push` sends commits, not working-tree edits — standalone `/ship` starts from an uncommitted tree). Verify the tree is clean after committing.
+2. Push the branch and open a PR against the project's default branch.
+3. Wait for CI green. Poll on a paced loop; don't block synchronously.
 
 ## Phase 4: Review round — batched
 
@@ -54,7 +55,7 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
 
 ## Phase 5: Merge, promote, prove
 
-1. Merge when CI is green and no actionable threads remain (squash unless the repo prefers otherwise). NEVER delete branches — feature branches are preserved, and long-lived branches (`main`, `staging`) must never be deleted.
+1. Merge when CI is green, no actionable threads remain, AND the repo's merge requirements are satisfied — check mergeable state, required human approvals, and branch-protection rules; green CI alone does not prove mergeability. Squash unless the repo prefers otherwise. NEVER delete branches — feature branches are preserved, and long-lived branches (`main`, `staging`) must never be deleted.
 2. Read the project's CLAUDE.md for its promote/verify pipeline (e.g. staging promote → verify → prod promote → verify-production). If defined, execute the steps in order. If none is defined, stop at merge and say so — do not invent a deploy.
 3. Close linked issues with evidence.
 4. **Every "verified" claim cites the command run and its raw output** (pass counts, exit codes, query results). If a check wasn't actually run, write NOT VERIFIED — never infer.

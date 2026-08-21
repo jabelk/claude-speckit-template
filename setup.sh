@@ -45,11 +45,15 @@ fi
 # permissions (scripts must keep their exec bits through a restore).
 BACKUP_DIR=$(mktemp -d)
 echo "Backing up custom skills and scripts..."
-cp -a "$REPO_ROOT/.claude/skills/feature" "$BACKUP_DIR/feature" 2>/dev/null || true
-cp -a "$REPO_ROOT/.claude/skills/review-plan" "$BACKUP_DIR/review-plan" 2>/dev/null || true
-cp -a "$REPO_ROOT/.claude/skills/review-plan-v2" "$BACKUP_DIR/review-plan-v2" 2>/dev/null || true
-cp -a "$REPO_ROOT/.claude/skills/ship" "$BACKUP_DIR/ship" 2>/dev/null || true
-cp -a "$REPO_ROOT/scripts" "$BACKUP_DIR/scripts" 2>/dev/null || true
+# A missing source is fine (skill not installed); a FAILED copy is not — with
+# set -e it aborts setup here, before specify init has touched anything, rather
+# than continuing without a backup and potentially clobbering the skill.
+backup_dir() { [ -d "$1" ] || return 0; cp -a "$1" "$2"; }
+backup_dir "$REPO_ROOT/.claude/skills/feature" "$BACKUP_DIR/feature"
+backup_dir "$REPO_ROOT/.claude/skills/review-plan" "$BACKUP_DIR/review-plan"
+backup_dir "$REPO_ROOT/.claude/skills/review-plan-v2" "$BACKUP_DIR/review-plan-v2"
+backup_dir "$REPO_ROOT/.claude/skills/ship" "$BACKUP_DIR/ship"
+backup_dir "$REPO_ROOT/scripts" "$BACKUP_DIR/scripts"
 
 # If specify init dies mid-run, set -e would otherwise skip the restore and
 # leave the tree half-overwritten with the backups stranded in a tmpdir.
