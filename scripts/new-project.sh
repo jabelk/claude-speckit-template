@@ -2,7 +2,7 @@
 # new-project.sh — Create a new project from the claude-speckit-template
 #
 # Usage:
-#   curl -sL https://raw.githubusercontent.com/Sierra-Code-Co/internal-speckit-template/main/scripts/new-project.sh | bash -s my-project
+#   curl -fsSL https://raw.githubusercontent.com/Sierra-Code-Co/internal-speckit-template/main/scripts/new-project.sh | bash -s my-project
 #   # or locally:
 #   ./scripts/new-project.sh my-project
 #   ./scripts/new-project.sh .          # current directory

@@ -25,7 +25,7 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
 
    **(a) One-off, no setup required**:
    ```bash
-   curl -sL https://raw.githubusercontent.com/Sierra-Code-Co/internal-speckit-template/main/scripts/new-project.sh | bash -s my-project
+   curl -fsSL https://raw.githubusercontent.com/Sierra-Code-Co/internal-speckit-template/main/scripts/new-project.sh | bash -s my-project
    ```
    Clones the template, strips git history, inits a fresh repo, runs `setup.sh`. Good for trying once.
 
