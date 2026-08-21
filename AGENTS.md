@@ -43,7 +43,7 @@ Use `/feature` to run the full workflow end-to-end, or use individual commands:
 
 | Script | Purpose | Example |
 |--------|---------|---------|
-| `create-new-feature.sh` | Create feature branch + spec file | `.specify/scripts/bash/create-new-feature.sh --short-name add-auth` |
+| `create-new-feature.sh` | Scaffold `specs/NNN-name/spec.md` and select it via `SPECIFY_FEATURE` (since spec-kit v1 it no longer checks out a git branch — branch separately per the rules above) | `.specify/scripts/bash/create-new-feature.sh --json --short-name add-auth "Add auth"` |
 | `setup-plan.sh` | Initialize plan from spec | `.specify/scripts/bash/setup-plan.sh` |
 | `check-prerequisites.sh` | Validate feature status | `.specify/scripts/bash/check-prerequisites.sh --json` |
 | `update-agent-context.sh` | Refresh agent context | `.specify/scripts/bash/update-agent-context.sh` |

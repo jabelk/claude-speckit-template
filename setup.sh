@@ -25,13 +25,13 @@ if ! command -v uv &>/dev/null; then
   exit 1
 fi
 
-# Install or upgrade specify CLI
-echo "Installing/upgrading specify CLI..."
-if uv tool list 2>/dev/null | grep -q specify-cli; then
-  uv tool upgrade specify-cli 2>/dev/null || true
-else
-  uv tool install specify-cli --from "git+https://github.com/github/spec-kit.git"
-fi
+# Install the specify CLI, pinned to a known release so every machine vendors
+# the same payload. Unpinned installs track the default branch and ship
+# x.y.z.dev0 builds — that's how a "0.5.0" template ended up alongside a
+# 0.14.x CLI. Bump this ONE variable to upgrade, then review the diff.
+SPECKIT_VERSION="v1.0.1"
+echo "Installing specify CLI ${SPECKIT_VERSION}..."
+uv tool install --force specify-cli --from "git+https://github.com/github/spec-kit.git@${SPECKIT_VERSION}"
 
 echo ""
 
@@ -46,6 +46,7 @@ BACKUP_DIR=$(mktemp -d)
 echo "Backing up custom skills and scripts..."
 cp -r "$REPO_ROOT/.claude/skills/feature" "$BACKUP_DIR/feature" 2>/dev/null || true
 cp -r "$REPO_ROOT/.claude/skills/review-plan" "$BACKUP_DIR/review-plan" 2>/dev/null || true
+cp -r "$REPO_ROOT/.claude/skills/review-plan-v2" "$BACKUP_DIR/review-plan-v2" 2>/dev/null || true
 cp -r "$REPO_ROOT/scripts" "$BACKUP_DIR/scripts" 2>/dev/null || true
 
 # Run specify init to pull latest spec-kit
@@ -65,8 +66,20 @@ restore_dir() {
 }
 restore_dir "$BACKUP_DIR/feature" "$REPO_ROOT/.claude/skills/feature" "/feature skill"
 restore_dir "$BACKUP_DIR/review-plan" "$REPO_ROOT/.claude/skills/review-plan" "/review-plan skill"
+restore_dir "$BACKUP_DIR/review-plan-v2" "$REPO_ROOT/.claude/skills/review-plan-v2" "/review-plan-v2 skill"
 restore_dir "$BACKUP_DIR/scripts" "$REPO_ROOT/scripts" "scripts/"
 rm -rf "$BACKUP_DIR"
+
+# Re-apply fleet drift: upstream ships `disable-model-invocation: false`, but
+# every workflow-shaped skill in this fleet is an explicit slash command only —
+# auto-firing /speckit-specify mid-conversation is a real failure mode. specify
+# init resets the flag on every re-vendor, so it is re-applied here rather than
+# trusted to memory.
+echo "Re-applying disable-model-invocation: true to speckit skills..."
+for f in "$REPO_ROOT"/.claude/skills/speckit-*/SKILL.md; do
+  [ -f "$f" ] || continue
+  perl -pi -e 's/^disable-model-invocation: false$/disable-model-invocation: true/' "$f"
+done
 
 # Install Anthropic's official Office skills (docx, pptx, xlsx) for generating
 # Word / PowerPoint / Excel artifacts (status reports, decks for mgmt, etc.)

@@ -31,3 +31,16 @@ Thumbs.db
 
 # Claude Code
 .claude/settings.local.json
+
+# Anthropic Office skills — non-redistributable per their LICENSE.txt.
+# Re-installed at setup time via scripts/install_office_skills.sh.
+.claude/skills/docx/
+.claude/skills/pptx/
+.claude/skills/xlsx/
+
+# Generated Office artifacts — hand-off only, never commit.
+*.docx
+*.pptx
+*.xlsx
+*.pdf
+~$*
