@@ -48,6 +48,7 @@ echo "Backing up custom skills and scripts..."
 cp -a "$REPO_ROOT/.claude/skills/feature" "$BACKUP_DIR/feature" 2>/dev/null || true
 cp -a "$REPO_ROOT/.claude/skills/review-plan" "$BACKUP_DIR/review-plan" 2>/dev/null || true
 cp -a "$REPO_ROOT/.claude/skills/review-plan-v2" "$BACKUP_DIR/review-plan-v2" 2>/dev/null || true
+cp -a "$REPO_ROOT/.claude/skills/ship" "$BACKUP_DIR/ship" 2>/dev/null || true
 cp -a "$REPO_ROOT/scripts" "$BACKUP_DIR/scripts" 2>/dev/null || true
 
 # If specify init dies mid-run, set -e would otherwise skip the restore and
@@ -58,6 +59,7 @@ restore_all() {
   for pair in "feature:.claude/skills/feature" \
               "review-plan:.claude/skills/review-plan" \
               "review-plan-v2:.claude/skills/review-plan-v2" \
+              "ship:.claude/skills/ship" \
               "scripts:scripts"; do
     src="$BACKUP_DIR/${pair%%:*}"; dest="$REPO_ROOT/${pair#*:}"
     [ -d "$src" ] || continue
@@ -106,6 +108,7 @@ restore_dir() {
 restore_dir "$BACKUP_DIR/feature" "$REPO_ROOT/.claude/skills/feature" "/feature skill"
 restore_dir "$BACKUP_DIR/review-plan" "$REPO_ROOT/.claude/skills/review-plan" "/review-plan skill"
 restore_dir "$BACKUP_DIR/review-plan-v2" "$REPO_ROOT/.claude/skills/review-plan-v2" "/review-plan-v2 skill"
+restore_dir "$BACKUP_DIR/ship" "$REPO_ROOT/.claude/skills/ship" "/ship skill"
 restore_dir "$BACKUP_DIR/scripts" "$REPO_ROOT/scripts" "scripts/"
 if [ "$restore_failed" -ne 0 ]; then
   echo "ERROR: restoration failed for one or more customs — backups preserved at $BACKUP_DIR" >&2
