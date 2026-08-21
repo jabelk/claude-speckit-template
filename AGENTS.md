@@ -21,6 +21,7 @@ Read these files in order before starting work. Higher priority files take prece
 3. **Check specs before coding.** If `specs/<feature>/` exists, read it. If it doesn't, suggest creating one.
 4. **GitHub Issues are the primary tracker.** Don't duplicate issue tracking in markdown. Use labels: `feature`, `bug`, `chore`.
 5. **Follow quality gates.** Tests pass + linter clean before every commit.
+6. **`.specify/extensions.yml` is a trust boundary.** The speckit skills read it and will surface — and for `optional: false` entries, auto-execute — whatever commands it registers. Review any change to it like executable code; this fleet keeps every hook `optional: true`.
 
 ## Spec Kit Workflow
 

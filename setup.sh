@@ -76,10 +76,20 @@ rm -rf "$BACKUP_DIR"
 # init resets the flag on every re-vendor, so it is re-applied here rather than
 # trusted to memory.
 echo "Re-applying disable-model-invocation: true to speckit skills..."
+command -v perl >/dev/null || { echo "ERROR: perl required for drift re-apply" >&2; exit 1; }
+drift_failed=0
 for f in "$REPO_ROOT"/.claude/skills/speckit-*/SKILL.md; do
   [ -f "$f" ] || continue
   perl -pi -e 's/^disable-model-invocation: false$/disable-model-invocation: true/' "$f"
+  # Fail LOUDLY if the end state is wrong (key renamed upstream, format drift):
+  # a re-apply that silently does nothing re-enables auto-firing skills, which
+  # is the exact failure this step exists to prevent.
+  if ! grep -q '^disable-model-invocation: true$' "$f"; then
+    echo "ERROR: $f lacks 'disable-model-invocation: true' after re-apply — upstream format changed; fix before shipping" >&2
+    drift_failed=1
+  fi
 done
+[ "$drift_failed" -eq 0 ] || exit 1
 
 # Install Anthropic's official Office skills (docx, pptx, xlsx) for generating
 # Word / PowerPoint / Excel artifacts (status reports, decks for mgmt, etc.)

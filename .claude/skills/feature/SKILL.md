@@ -66,6 +66,7 @@ Present findings to user. This step has repeatedly prevented bad architectural d
 5. If any YELLOW: review with user and decide whether to fix first
 6. If all providers are SKIPPED (missing API keys): flag to user, perform manual architectural review as fallback
 7. Wait for user approval before moving to Phase 5
+8. Note: `/speckit-implement` also surfaces this gate as an optional `before_implement` hook (`.specify/extensions.yml`) — that's the safety net for anyone running the speckit chain without `/feature`. If the review already passed here, don't re-run it when the hook prompt appears.
 
 ## Phase 5: Implement
 

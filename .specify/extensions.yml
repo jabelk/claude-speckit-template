@@ -1,0 +1,19 @@
+# Extension hook registry — read by the vendored speckit skills before/after
+# each command (hooks.before_<command> / hooks.after_<command>).
+#
+# TRUST BOUNDARY: commands listed here are surfaced by the skills, and a hook
+# marked `optional: false` is AUTO-EXECUTED without further approval. Review
+# any change to this file like executable code. This fleet's convention is
+# `optional: true` only — hooks remind, they never auto-fire (the same
+# philosophy as disable-model-invocation: true on the skills themselves).
+#
+# This file is OURS, not spec-kit's: `specify init` does not overwrite it, so
+# it carries the fleet's review-gate wiring across upstream re-vendors — the
+# supported replacement for hand-editing vendored SKILL.md files.
+hooks:
+  before_implement:
+    - extension: review-plan-gate
+      command: review-plan
+      description: "External multi-model review of spec + plan (OpenAI + Gemini) — the anti-self-grading gate. YELLOW/RED requires explicit human approval before implementation."
+      prompt: "Run /review-plan before implementing, unless it already passed for this feature in this session."
+      optional: true
