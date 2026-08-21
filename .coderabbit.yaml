@@ -1,0 +1,140 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+# CodeRabbit configuration — generated from claude-workflows baseline
+# template. Tune per-project as needed.
+#
+# Workflow: pre-push CLI catches most issues; PR review is safety net.
+# See ~/.claude/CLAUDE.md "Pre-push" + "Waiting for PR review + CI"
+# sections for the full pattern.
+#
+# Add path_instructions for project-specific concerns (auth, schema,
+# domain logic) below the generic **/*.md block. See companion-ai's
+# .coderabbit.yaml for an example with substantive path_instructions.
+
+language: 'en-US'
+early_access: false
+enable_free_tier: true
+
+reviews:
+  profile: 'assertive'
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  collapse_walkthrough: true
+  poem: false
+  sequence_diagrams: false
+  related_issues: true
+  related_prs: true
+  abort_on_close: true
+
+  path_filters:
+    - '!**/*.png'
+    - '!**/*.jpg'
+    - '!**/*.webp'
+    - '!**/*.gif'
+    - '!**/*.mp4'
+    - '!**/node_modules/**'
+    - '!**/dist/**'
+    - '!**/build/**'
+    - '!**/.next/**'
+    - '!**/coverage/**'
+    - '!**/package-lock.json'
+    - '!**/pnpm-lock.yaml'
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      # NOTE: propagate-coderabbit-yaml.sh injects the destination repo's
+      # actual default branch here on apply (per ADR feature 002-fleet-cr-rollout
+      # FR-008a). Detection: `git symbolic-ref refs/remotes/origin/HEAD` with
+      # `git config init.defaultBranch` fallback. Replace this placeholder with
+      # the detected value during apply. The template ships with `main` as a
+      # safe default; per-repo copies carry the correct value.
+      - main
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 3
+    ignore_title_keywords:
+      - 'WIP'
+      - 'DO NOT MERGE'
+
+  path_instructions:
+    - path: '{.specify/**,.claude/skills/speckit-*/**}'
+      instructions: |
+        VENDORED upstream content: these files are copied verbatim from
+        github/spec-kit by `specify init` (see setup.sh) and are re-vendored
+        on every upgrade. Do NOT review them as hand-written code — defects
+        here belong upstream, and local patches get clobbered by the next
+        re-vendor. Flag ONLY:
+        - Secrets or credentials
+        - A local modification that will obviously break this repo's own
+          scripts (setup.sh, scripts/**) or documented workflow
+        The one intentional local delta: `disable-model-invocation: true`
+        in speckit-*/SKILL.md frontmatter (re-applied by setup.sh).
+
+    - path: '**/*.md'
+      instructions: |
+        Personal/small project. Skip pure prose/grammar/style nits and
+        "consider clarifying" rewrites. Flag:
+        - Factual errors (wrong commands, broken syntax in code blocks)
+        - Broken links / dead references
+        - Cross-doc inconsistencies (CHANGELOG/spec/code drift)
+        - Wrong API/CLI syntax in command examples
+
+    - path: 'specs/**'
+      instructions: |
+        Light review only. Spec-driven workflow files (spec.md, plan.md,
+        tasks.md, research.md, data-model.md, contracts/**, quickstart.md)
+        intentionally lock structure for reproducibility. Flag:
+        - Cross-file consistency drift (spec.md and plan.md disagree)
+        - Broken links between spec artifacts
+        - Tasks reference files/APIs that don't exist
+        Do NOT flag:
+        - File-path references as "implementation details leaking into spec"
+          (these are intentional structural locks — the spec deliberately
+          names files/dirs so the implementation is reproducible)
+        - Section structure or heading conventions
+        - Prose tone (directive style is intentional)
+
+    - path: '**/*.{md,mdx,html,json,yaml,yml}'
+      instructions: |
+        `author:` frontmatter, public author bylines, and "by <name>"
+        attributions in published content (blog posts, site copy, FAQ entries,
+        schema.org PersonSchema, structured data) are intentional site/blog
+        conventions — NOT PII leaks or sensitive data exposure.
+        Do NOT flag:
+        - `author: "Jane Doe"` in frontmatter
+        - "Written by ..." or "By ..." bylines
+        - Public author/owner names in any structured data
+        DO flag (separately):
+        - Email addresses, phone numbers, physical addresses (real PII)
+        - API keys, tokens, credentials (gitleaks tool covers most of this)
+
+  tools:
+    gitleaks:
+      enabled: true
+    markdownlint:
+      enabled: true
+    actionlint:
+      enabled: true
+    shellcheck:
+      enabled: true
+
+  slop_detection:
+    enabled: false
+
+chat:
+  auto_reply: false
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: true
+  code_guidelines:
+    enabled: true
+  learnings:
+    scope: auto
+  issues:
+    scope: auto
+  pull_requests:
+    scope: auto
