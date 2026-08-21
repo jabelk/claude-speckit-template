@@ -2,7 +2,7 @@
 # new-project.sh — Create a new project from the claude-speckit-template
 #
 # Usage:
-#   curl -sL https://raw.githubusercontent.com/jabelk/claude-speckit-template/main/scripts/new-project.sh | bash -s my-project
+#   curl -sL https://raw.githubusercontent.com/Sierra-Code-Co/internal-speckit-template/main/scripts/new-project.sh | bash -s my-project
 #   # or locally:
 #   ./scripts/new-project.sh my-project
 #   ./scripts/new-project.sh .          # current directory
@@ -32,7 +32,7 @@ mkdir -p "$TARGET_DIR"
 # Clone template, strip its git history
 echo "Cloning template..."
 TMPDIR=$(mktemp -d)
-git clone --depth 1 https://github.com/jabelk/claude-speckit-template.git "$TMPDIR/tpl" 2>/dev/null
+git clone --depth 1 https://github.com/Sierra-Code-Co/internal-speckit-template.git "$TMPDIR/tpl" 2>/dev/null
 rm -rf "$TMPDIR/tpl/.git"
 rm -f "$TMPDIR/tpl/scripts/migrate-repos.sh"  # not needed in new projects
 
