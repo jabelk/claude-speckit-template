@@ -39,6 +39,7 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
 1. Run the project's lint, format, and test commands as SEPARATE, UNPIPED commands. Pipes mask exit codes — a `cmd | tail` that "passed" has shipped red CI before. If piping is unavoidable, `set -o pipefail` or check `${PIPESTATUS[0]}`. Every gate must exit 0.
 2. `git status --short` and `git diff HEAD --stat` — the plain `git diff` misses staged and untracked files; confirm no unintended changes anywhere in the tree.
 3. If a local review CLI is available (`review-plan-v2`, `coderabbit`), run it against the base branch and address its findings now — the PR-side review is the safety net, not the first pass.
+4. **Web-UI changes get a browser walkthrough, unprompted.** If the change touches anything rendered in a browser, walk the affected flows as a user would (Claude in Chrome when available: navigate, click, fill forms, read the rendered result). API-level smoke tests verify the API, not the feature — they do not satisfy this gate.
 
 ## Phase 3: Commit + PR
 
@@ -56,6 +57,6 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
 ## Phase 5: Merge, promote, prove
 
 1. Merge when CI is green, no actionable threads remain, AND the repo's merge requirements are satisfied — check mergeable state, required human approvals, and branch-protection rules; green CI alone does not prove mergeability. Squash unless the repo prefers otherwise. NEVER delete branches — feature branches are preserved, and long-lived branches (`main`, `staging`) must never be deleted.
-2. Read the project's CLAUDE.md for its promote/verify pipeline (e.g. staging promote → verify → prod promote → verify-production). If defined, execute the steps in order. If none is defined, stop at merge and say so — do not invent a deploy.
+2. Read the project's CLAUDE.md for its promote/verify pipeline (e.g. staging promote → verify → prod promote → verify-production). If defined, execute the steps in order — and for web-UI changes, the staging/prod verify includes a browser walkthrough of the affected flows, not just API checks. If none is defined, stop at merge and say so — do not invent a deploy.
 3. Close linked issues with evidence.
 4. **Every "verified" claim cites the command run and its raw output** (pass counts, exit codes, query results). If a check wasn't actually run, write NOT VERIFIED — never infer.
