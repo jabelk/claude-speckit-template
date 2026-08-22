@@ -13,6 +13,7 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
 | `.specify/` | Spec Kit (dependency) | Scripts, templates, and memory for spec-driven development |
 | `.claude/skills/speckit-*` | Spec Kit (dependency) | Spec-driven development commands |
 | `.claude/skills/feature/` | Custom | Full workflow orchestrator (orient, research, specify, plan, review, implement, ship) |
+| `.claude/skills/ship/` | Custom | Shipping mechanics as a standalone skill — self-review checklist, unpiped gates, PR, batched review round, merge, per-project promote/verify. `/feature` Phase 6 delegates here; use directly for small fixes that don't need the spec ceremony. |
 | `.claude/skills/review-plan/` | Custom | Multi-model peer review gate |
 | `scripts/review-plan.sh` | Custom | Sends plans to OpenAI gpt-5.3-codex, Gemini 2.5 Pro for peer review |
 | `scripts/install_office_skills.sh` | Custom | Installs Anthropic's official `docx` / `pptx` / `xlsx` skills so Claude Code can generate Word, PowerPoint, and Excel artifacts directly. Re-fetches from upstream (skills are non-redistributable per their LICENSE.txt). |
@@ -106,7 +107,7 @@ Phase 3: Specify    → /speckit-specify — write the feature spec
 Phase 4: Plan       → /speckit-plan + /speckit-tasks — architecture + task breakdown
 Phase 4.5: Review   → /review-plan — multi-model peer review (GREEN/YELLOW/RED)
 Phase 5: Implement  → /speckit-implement — TDD execution
-Phase 6: Ship       → Tests, PR, merge, deploy
+Phase 6: Ship       → /ship — gates, PR, batched review, merge; promote/verify if the project defines a pipeline
 ```
 
 ## Updating Spec Kit
