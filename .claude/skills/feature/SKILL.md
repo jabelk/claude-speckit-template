@@ -61,7 +61,7 @@ Present findings to user. This step has repeatedly prevented bad architectural d
 
 1. Run `/review-plan` — sends spec + plan to OpenAI gpt-5.3-codex and Gemini 2.5 Pro for independent peer review
 2. The script outputs raw text from each model — you must read the output and interpret the GREEN/YELLOW/RED ratings manually
-3. Present all three reviews to the user with a summary
+3. Present both provider reviews to the user with a summary
 4. If any RED: strongly recommend fixes; proceed only with explicit user approval
 5. If any YELLOW: review with user and decide whether to fix first
 6. If all providers are SKIPPED (missing API keys): flag to user, perform manual architectural review as fallback

@@ -54,6 +54,12 @@ for repo in "${FLEET[@]}"; do
   if git -C "$dir" show-ref --verify --quiet "refs/heads/$BRANCH"; then
     echo "  skip: branch $BRANCH already exists"; skipped=$((skipped+1)); continue
   fi
+  # The remote too: origin/$BRANCH without a local copy (pushed from another
+  # machine) would otherwise be silently updated by the `push -u` below —
+  # changing a PR branch someone else owns.
+  if git -C "$dir" ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+    echo "  skip: origin/$BRANCH already exists"; skipped=$((skipped+1)); continue
+  fi
   default=$(git -C "$dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||')
   default="${default:-main}"
   echo "  default branch: $default"
