@@ -24,8 +24,9 @@ preflight() (
     echo "STOP: cannot inspect the worktree, so the vendor leg is not safe." >&2
     exit 2
   fi
-  if printf '%s\n' "$worktree" | grep -q '^??'; then
-    printf '%s\n' "$worktree" | grep '^??'
+  # NOT a pipeline, deliberately — see "the guard fell open under pipefail" below.
+  if untracked=$(grep '^??' <<<"$worktree"); then
+    printf '%s\n' "$untracked"
     echo "STOP: the vendor leg would send the untracked files listed above." >&2
     exit 2
   fi
@@ -37,9 +38,11 @@ Then the gate itself:
 ```bash
 preflight \
   && review-plan-v2 --static-only --plain --base "$BASE" \
+  && preflight \
   && coderabbit review --base "$BASE" --include-untracked
 # leg 1: deterministic only, nothing is billed, nothing leaves the machine
 # leg 2: sends the diff to a vendor; plain text is its default, --plain is NOT a flag
+# preflight twice on purpose: once to fail fast, once immediately before the send
 ```
 
 **A named guard, because annotating the other blocks did not guard them.** Until
@@ -62,6 +65,34 @@ this file's answer to that was a note saying "interactively, read the STOP line"
 which is documentation standing in for a defect. A subshell function body makes
 `exit 2` mean "the guard failed", interactively and in a script alike. CodeRabbit
 caught it.
+
+**The guard fell open under `pipefail`, and this file is what turned it on.** The
+check used to be `printf '%s\n' "$worktree" | grep -q '^??'`. `grep -q` exits the
+moment it matches, so on a long list `printf` is still writing when the read end
+closes and takes `SIGPIPE`, exiting 141. With `set -o pipefail` the pipeline
+reports 141 rather than `grep`'s 0, the `if` sees non-zero, and the *proceed*
+branch runs — the guard concludes the worktree is clean because it found too many
+untracked files to finish saying so. Measured on 2026-08-29, `pipefail` set: at 3
+untracked files the guard triggered correctly; at 20,000 it printed
+`status=141` and fell open. Not hypothetical here, either — the structured-output
+block below tells you to `set -o pipefail`, and this file says every block assumes
+the definitions pasted once per shell, so following it in order arms the failure.
+The form above has no pipeline at all: one `grep` reading a here-string, whose
+status is its own, and the captured list is what gets printed. CodeRabbit caught
+it. That is the third time the same guard has been wrong in the direction of
+sending the diff, and all three had the same shape — a status that was not the
+status the guard thought it was reading.
+
+**`preflight` runs twice, because the first call answers about a worktree the send
+does not use.** Between the guard and the vendor leg sits the entire runtime of
+the static leg, which is where an editor autosave, a build artifact, or another
+agent session working in the same tree lands a new untracked file. `--include-untracked`
+then sends a file that no gitleaks run ever saw, which is the exact hole the guard
+exists to close, arrived at through the check rather than around it. The second
+call costs one `git status` and closes the window to the width of a process spawn.
+CodeRabbit caught this, and the reason it is worth taking seriously rather than
+filing as paranoia is that a second session writing into a shared worktree is the
+normal case on this machine, not a contrived one.
 
 **Fail closed, because the guard's clean answer and its broken answer looked the
 same.** The earlier form was `if git status --porcelain -uall | grep '^??'`. When
@@ -100,7 +131,7 @@ So the untracked check happens **before** either leg, from git, not from CodeRab
 
 **The check is wrapped in an `if` rather than left as a bare pipeline because its clean result is a non-zero exit.** `grep '^??'` finding nothing exits **1**, so the outcome you want is the one that looks like failure: as a bare line above the gate under `set -e` the clean case aborts before either leg runs, and without `set -e` it is a line whose output nobody is obliged to read. Wrapping it makes the ordering structural instead of a thing the reader has to remember to honour. This is also why the two `if`s are separate rather than an `if`/`elif`: the first tests whether the worktree could be *read*, the second what it *contains*, and collapsing them invites the fail-open form below.
 
-Between them these paragraphs record four consecutive rounds on one guard: CodeRabbit caught the missing `if`, then the fail-open pipeline capture, then the two unguarded copyable blocks, then the interactive-shell-killing `exit`. Four rounds on nine lines of shell is the argument for the guard being a function rather than a paragraph.
+Between them these paragraphs record six consecutive rounds on one guard: CodeRabbit caught the missing `if`, then the fail-open pipeline capture, then the two unguarded copyable blocks, then the interactive-shell-killing `exit`, then the `SIGPIPE` fail-open under `pipefail`, then the window between the check and the send. Six rounds on nine lines of shell stopped being an argument for making the guard a function some rounds ago; it is an argument for the guard not living in prose at all. A shell fragment in a Markdown file has no mechanism to be wrong out loud — nothing executes it, nothing tests it, and every reader is free to paste half of it. Each of those six fixes was correct and each one left the next hole, which is what iterating on documentation instead of on code buys. The version of this that stops the sequence is a committed script with the guard as its first function and a test that feeds it a dirty worktree, invoked as one command from here.
 
 **The bar is no untracked files at all, not "none belonging to this change."** `--include-untracked` sends every non-ignored untracked file in the worktree, so scratch notes, a pasted credential, a downloaded export, or a colleague's data sample sitting in the tree unrelated to the branch all go to the vendor with it. Deciding which ones "belong to the change" is a judgement made after the send. If a file should be reviewed, commit it and re-run the static leg; if it should not leave the machine, `.gitignore` it or move it out of the tree; if it is genuinely scratch, that is what `.gitignore` is for.
 
@@ -138,6 +169,7 @@ Keep running it because it is the half CodeRabbit does not replace: a pre-push s
 set -o pipefail   # or check ${PIPESTATUS[0]} / ${pipestatus[1]} in zsh
 preflight \
   && review-plan-v2 --static-only --agent --base "$BASE" | jq 'select(.type == "finding")' \
+  && preflight \
   && coderabbit review --agent --base "$BASE" --include-untracked
 ```
 
@@ -158,9 +190,11 @@ The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → th
 **If the binary is absent, do not fall through to the vendor leg alone.** That was the previous advice here and it was wrong: it sends the diff off the machine with no secret scan in front of it, which is the one sequence this skill exists to preserve. gitleaks is an independent binary and does not need `review-plan-v2`, so it can stand in for leg 1:
 
 ```bash
-# gitleaks substitutes for leg 1 ONLY. `preflight` is still the first thing that runs.
+# gitleaks substitutes for leg 1 ONLY. `preflight` is still the first thing that runs,
+# and runs again immediately before the send.
 preflight \
   && gitleaks git --log-opts="$BASE..HEAD" \
+  && preflight \
   && coderabbit review --base "$BASE" --include-untracked
 ```
 

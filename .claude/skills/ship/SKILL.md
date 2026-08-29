@@ -65,8 +65,10 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
        echo "STOP: cannot inspect the worktree, so leg 2 is not safe to run." >&2
        exit 2
      fi
-     if printf '%s\n' "$worktree" | grep -q '^??'; then
-       printf '%s\n' "$worktree" | grep '^??'
+     # NOT a pipeline: under `pipefail`, `grep -q` exits early, `printf` takes SIGPIPE,
+     # and the pipeline reports 141 — so the guard runs its own proceed branch.
+     if untracked=$(grep '^??' <<<"$worktree"); then
+       printf '%s\n' "$untracked"
        echo "STOP: leg 2 would send the untracked files listed above to the vendor." >&2
        exit 2
      fi
@@ -74,7 +76,9 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
 
    preflight \
      && review-plan-v2 --static-only --plain --base "$BASE" \
+     && preflight \
      && coderabbit review --base "$BASE" --include-untracked
+   # preflight twice on purpose: once to fail fast, once immediately before the send
    ```
 
    The order matters, and so does the `&&`. gitleaks runs in the first leg and nothing leaves the machine there; the second sends the diff to a vendor. A secret scan after the egress cannot prevent anything — and on two separate lines a failing scan does not stop the send either, which is the same hole with a shell prompt in the middle of it. Chained, any actionable static finding blocks the vendor leg until it is fixed; that is intended. **Never run `review-plan-v2` without `--static-only`** — its AI reviewer legs were retired on 2026-08-28. Set `BASE` once rather than typing the branch per command: the fallback below takes the same base, and a fallback that hardcodes `main` on a staging repo diffs the wrong range and still exits 0.
@@ -89,9 +93,11 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
 
    **And it is a named function with a subshell body, which was the fourth round on the same nine lines.** `preflight` defined once and invoked as `preflight && ...` is the only arrangement that puts the check at every vendor site while keeping a single copy of it; the two earlier arrangements each got half, one by siting the guard next to its explanation rather than in the command people copy, the other by marking the remaining copyable blocks with a comment saying the guard still applied. The `( ... )` body is separate: a bare `if` with `exit 2` is right in a script and terminates the *user's shell* when pasted into an interactive one, which this skill had previously answered with a note telling the reader to read the STOP line. Verified on 2026-08-29 in all three states — clean tree, untracked file present, and not a git repository — the function returns 0/2/2, blocks the chain on both failures, and the calling shell survives every one.
 
+   **It contains no pipeline, and it runs twice, which were rounds five and six.** `printf '%s\n' "$worktree" | grep -q '^??'` fails open under `set -o pipefail`: `grep -q` exits at the first match, `printf` takes `SIGPIPE` and exits 141, `pipefail` makes 141 the pipeline's status, and the `if` therefore takes the proceed branch — the guard rules the worktree clean because it found too many untracked files to finish listing them. Measured on 2026-08-29 with `pipefail` set: correct at 3 untracked files, `status=141` and fell open at 20,000. The form above is one `grep` over a here-string, whose status is its own. And `preflight` is called again immediately before the vendor command because the gap between the two is the entire runtime of leg 1, which is when an editor autosave, a build artifact, or a second agent session in the same worktree lands a file that `--include-untracked` then ships unscanned. Both were CodeRabbit findings. Six rounds have now landed on these nine lines, every fix correct and every one leaving the next hole, which is the argument for the guard living in a committed script with a test rather than in a Markdown block that nothing executes.
+
    The bar is not "nothing belonging to the change" — nothing at all. `--include-untracked` sends every non-ignored untracked file in the worktree, so scratch notes, a pasted credential, or an unrelated data export go to the vendor along with the diff, and deciding what "belonged" is a judgement made after the send. Commit what should be reviewed and `.gitignore` or move what should not. The flag stays as a backstop that should then find nothing; `gitleaks dir .` scans the working tree locally if you need that answer before committing.
 
-   **If the static leg is unavailable, do not run the vendor leg on its own** — that ships the diff with no secret scan in front of it. Chain them so a leak actually stops the send, and lead with the same guard, because gitleaks substitutes for leg 1 and not for the preflight: `preflight && gitleaks git --log-opts="$BASE..HEAD" && coderabbit review --base "$BASE" --include-untracked`, using the same `BASE` set above. Writing it as a comment saying "the preflight above still applies" was the earlier fix here and CodeRabbit rejected it — a note telling a reader what they should have run is not a guard on what they did run, and this line is copyable and complete on its own. On separate lines a non-zero gitleaks exit does not prevent the next command. If gitleaks is missing too, stop and say the gate cannot run.
+   **If the static leg is unavailable, do not run the vendor leg on its own** — that ships the diff with no secret scan in front of it. Chain them so a leak actually stops the send, and lead with the same guard, because gitleaks substitutes for leg 1 and not for the preflight: `preflight && gitleaks git --log-opts="$BASE..HEAD" && preflight && coderabbit review --base "$BASE" --include-untracked`, using the same `BASE` set above. Writing it as a comment saying "the preflight above still applies" was the earlier fix here and CodeRabbit rejected it — a note telling a reader what they should have run is not a guard on what they did run, and this line is copyable and complete on its own. On separate lines a non-zero gitleaks exit does not prevent the next command. If gitleaks is missing too, stop and say the gate cannot run.
 
 3. Address what the gate surfaced, and route it by KIND — the remedies are not interchangeable:
    - **A gitleaks hit is not a follow-up-commit fix.** A later commit that deletes the credential leaves it intact in the earlier commit, and `git push` sends the whole branch, so the secret reaches the remote regardless. Treat it as a live disclosure: **rotate or revoke the credential first**, on the assumption it is already compromised, then remove it from the unpushed history (`git commit --amend` if it is the tip, an interactive rebase or a fresh branch otherwise) and re-run the scan on the rewritten range before pushing anything. History rewriting is destructive, so confirm the branch is not shared and the work is recoverable — and if the commit was already pushed, rotation is the only remedy that still works.
