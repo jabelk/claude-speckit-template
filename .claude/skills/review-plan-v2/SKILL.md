@@ -24,10 +24,12 @@ Use `--base staging` on repos with a staging branch. Both share exit-code semant
 So the untracked check happens **before** either leg, from git, not from CodeRabbit's file count — by the time the second leg reports an extra file it has already sent it:
 
 ```bash
-git status --short          # nothing here should belong to the change
+git status --porcelain --untracked-files=all | grep '^??'   # must print NOTHING
 ```
 
-If something does, commit it and re-run the static leg first. Keep `--include-untracked` anyway, as the backstop that should find nothing; if it reports files the `reviewing N of M` line did not, that is a scan you skipped, not a bonus. Files matched by `.gitignore` stay excluded either way. If you need a secret scan over the working tree including untracked files, gitleaks does it directly and locally: `gitleaks dir .` (verified on 8.30.1).
+**The bar is no untracked files at all, not "none belonging to this change."** `--include-untracked` sends every non-ignored untracked file in the worktree, so scratch notes, a pasted credential, a downloaded export, or a colleague's data sample sitting in the tree unrelated to the branch all go to the vendor with it. Deciding which ones "belong to the change" is a judgement made after the send. If a file should be reviewed, commit it and re-run the static leg; if it should not leave the machine, `.gitignore` it or move it out of the tree; if it is genuinely scratch, that is what `.gitignore` is for.
+
+Keep `--include-untracked` anyway, as the backstop that should then find nothing: if it reports files the `reviewing N of M` line did not, that is a scan you skipped, not a bonus. Files matched by `.gitignore` stay excluded either way. If you need a secret scan over the working tree including untracked files, gitleaks does it directly and locally: `gitleaks dir .` (verified on 8.30.1).
 
 ## What changed on 2026-08-28, and why it matters to how you read this
 
@@ -58,9 +60,12 @@ Keep running it because it is the half CodeRabbit does not replace: a pre-push s
 ## Structured output
 
 ```bash
+set -o pipefail   # or check ${PIPESTATUS[0]} / ${pipestatus[1]} in zsh
 review-plan-v2 --static-only --agent --base main | jq 'select(.type == "finding")'
 coderabbit review --agent --base main --include-untracked
 ```
+
+**`set -o pipefail` is part of the example, not decoration.** Without it the pipeline reports `jq`'s status, so an analyzer exiting 1 or 2 reads as 0 — a gate that found something, or failed to run at all, reported as clean by the one number a caller checks.
 
 The `--agent` summary record reports `static_only`, so a consumer can tell an exit 1 from the deterministic half apart from an exit 1 from a full review.
 
@@ -75,12 +80,13 @@ The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → th
 **If the binary is absent, do not fall through to the vendor leg alone.** That was the previous advice here and it was wrong: it sends the diff off the machine with no secret scan in front of it, which is the one sequence this skill exists to preserve. gitleaks is an independent binary and does not need `review-plan-v2`, so run it directly and then proceed:
 
 ```bash
-gitleaks git --log-opts="main..HEAD"   # the committed range, matching what the vendor leg sends
-gitleaks dir .                         # or the working tree, if untracked files are in play
-coderabbit review --base main --include-untracked
+gitleaks git --log-opts="main..HEAD" \
+  && coderabbit review --base main --include-untracked
 ```
 
-Both forms verified on gitleaks 8.30.1. If gitleaks is not installed either, stop and say the gate cannot run — the remaining lint analyzers are worth having but they are not what stands between a credential and a third party.
+**Chained with `&&`, not listed on separate lines.** A leak exits non-zero, and on separate lines the next command runs anyway — sending to the vendor the exact diff the scan just objected to. Use `gitleaks dir .` in place of the `git` form when untracked files are in play; it scans the working tree. Both forms verified on gitleaks 8.30.1.
+
+If gitleaks is not installed either, stop and say the gate cannot run. The remaining lint analyzers are worth having but they are not what stands between a credential and a third party.
 
 ## Coexistence with /review-plan v1
 
