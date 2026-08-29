@@ -9,11 +9,15 @@ description: Pre-push gate for the current branch's diff. Runs review-plan-v2's 
 
 ```bash
 # Prerequisite: the change is COMMITTED. The first leg reads the committed diff.
-review-plan-v2 --static-only --plain --base main            # deterministic only; nothing is billed
-coderabbit review --base main --include-untracked           # plain text is its default; --plain is NOT a flag
+review-plan-v2 --static-only --plain --base main \
+  && coderabbit review --base main --include-untracked
+# leg 1: deterministic only, nothing is billed, nothing leaves the machine
+# leg 2: sends the diff to a vendor; plain text is its default, --plain is NOT a flag
 ```
 
 Use `--base staging` on repos with a staging branch. Both share exit-code semantics: `0` clean, `1` actionable, `2` tool error. Address what either surfaces before pushing.
+
+**The `&&` is the point, not shell tidiness.** On two separate lines a non-zero first leg does not stop the second, so a gitleaks hit is followed by the diff being sent to a vendor anyway and the scan prevented nothing. This skill said exactly that about the missing-binary fallback while leaving the primary command unchained, which is the same defect one line higher up; CodeRabbit caught it. Accept the consequence the chain brings: any actionable static finding, lint included, now blocks the vendor leg until it is fixed. That is the intended order — the local half is free and the vendor half is not, and "address what either surfaces before pushing" is not a thing a caller should have to remember to do in sequence.
 
 **The commit prerequisite is load-bearing, not tidiness.** `review-plan-v2` has no working-tree mode. Run it on uncommitted work and it prints `reviewing 0 of 0` and exits **0** — a clean-looking gate that ran no secret scan and no lint over the change. So if the `reviewing N of M changed file(s)` line reads zero while you have work in progress, that is the diagnosis; commit and re-run rather than reading it as a pass.
 

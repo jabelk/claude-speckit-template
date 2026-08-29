@@ -72,43 +72,77 @@ frontmatter_end() {
   awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { print NR; exit }' "$1"
 }
 
-# Every `disable-model-invocation:` line strictly inside the frontmatter block.
+# Every `disable-model-invocation:` line strictly inside the frontmatter block,
+# and (second function) that key's value.
 #
-# The key is matched with optional surrounding quotes and optional leading
-# indentation, because YAML accepts `"disable-model-invocation": true` as the
-# same setting. Matching only the bare form read that file as "key absent" and
-# skipped it — leaving a skill model-disabled while the script exited 0, since a
-# verified `ship` exemption is enough to keep the examined-nothing guard quiet.
-# A guard defeated by a pair of quotes is not a guard.
-frontmatter_key_lines() {
-  awk -v end="$2" -v q="[\"']" '
-    NR > 1 && NR < end {
-      line = $0
-      sub(/^[ \t]+/, "", line)
-      if (line ~ "^" q "?disable-model-invocation" q "?[ \t]*:") print $0
-    }' "$1"
+# Both go through one perl matcher, because deciding whether a line declares
+# this key is a decoding problem rather than a pattern-matching one, and it has
+# already been got wrong twice in the same direction:
+#
+#   1. Matching only the bare `disable-model-invocation:` read
+#      `"disable-model-invocation": true` as "key absent" and skipped the file —
+#      leaving a skill model-disabled while the script exited 0, because a
+#      verified `ship` exemption is enough to keep the examined-nothing guard
+#      quiet. A guard defeated by a pair of quotes is not a guard.
+#   2. Adding optional quotes still missed
+#      `"disable-model-invocation": true`, which is valid YAML for the same
+#      key: a double-quoted scalar decodes \uXXXX and \xXX escapes. Same silent
+#      skip, same exit 0. CodeRabbit caught this one.
+#
+# So the key is decoded before it is compared: quotes stripped, and inside
+# double quotes the escapes YAML actually defines are resolved. A line whose
+# decoded key matches is REPORTED, not accepted — an exotic spelling then hits
+# the non-canonical-form guard further down and fails loudly, because being
+# willing to recognise a form is not the same as being willing to rewrite it.
+# That keeps this function's job "see everything" and leaves "edit only what is
+# unambiguous" where it belongs.
+_frontmatter_match() {
+  # $1 file, $2 frontmatter end line, $3 mode: "lines" | "value"
+  perl -e '
+    my ($file, $end, $mode) = @ARGV;
+    open my $fh, "<", $file or exit 0;
+    my $target = "disable-model-invocation";
+    while (my $raw = <$fh>) {
+      last if $. >= $end;
+      next if $. <= 1;
+      chomp(my $line = $raw);
+      my $rest = $line;
+      $rest =~ s/^[ \t]+//;
+
+      my ($key, $val);
+      if ($rest =~ /^"((?:[^"\\]|\\.)*)"[ \t]*:[ \t]*(.*)$/) {
+        ($key, $val) = ($1, $2);
+        # YAML double-quoted scalars decode these; anything else stays literal.
+        $key =~ s/\\u([0-9a-fA-F]{4})/chr(hex($1))/ge;
+        $key =~ s/\\x([0-9a-fA-F]{2})/chr(hex($1))/ge;
+        $key =~ s/\\(.)/$1/g;
+      } elsif ($rest =~ /^'"'"'([^'"'"']*)'"'"'[ \t]*:[ \t]*(.*)$/) {
+        ($key, $val) = ($1, $2);   # single quotes: no escape processing in YAML
+      } elsif ($rest =~ /^([^:\s]+)[ \t]*:[ \t]*(.*)$/) {
+        ($key, $val) = ($1, $2);
+      } else {
+        next;
+      }
+      next unless $key eq $target;
+
+      if ($mode eq "lines") { print "$line\n"; next; }
+
+      $val =~ s/[ \t]*#.*$//;
+      $val =~ s/[ \t]+$//;
+      $val =~ s/^"(.*)"$/$1/ or $val =~ s/^'"'"'(.*)'"'"'$/$1/;
+      print "$val\n";
+      exit 0;
+    }
+  ' "$1" "$2" "$3"
 }
+
+frontmatter_key_lines() { _frontmatter_match "$1" "$2" lines; }
 
 # The key's value, normalised: indentation, quotes around the key, quotes around
 # the value, trailing whitespace and a trailing `# comment` all removed. Compare
 # against this rather than against the whole raw line, so the several spellings
 # of the same setting are treated as the same setting.
-frontmatter_key_value() {
-  awk -v end="$2" -v q="[\"']" '
-    NR > 1 && NR < end {
-      line = $0
-      sub(/^[ \t]+/, "", line)
-      if (line ~ "^" q "?disable-model-invocation" q "?[ \t]*:") {
-        sub("^" q "?disable-model-invocation" q "?[ \t]*:[ \t]*", "", line)
-        sub(/[ \t]*#.*$/, "", line)
-        sub(/[ \t]+$/, "", line)
-        sub("^" q, "", line)
-        sub(q "$", "", line)
-        print line
-        exit
-      }
-    }' "$1"
-}
+frontmatter_key_value() { _frontmatter_match "$1" "$2" value; }
 
 changed=0
 checked=0

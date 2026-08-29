@@ -54,11 +54,11 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
 2. **Now** run the local review gate, after the commit and before the push — the PR-side review is the safety net, not the first pass. Both legs, in this order:
 
    ```bash
-   review-plan-v2 --static-only --plain --base <base>
-   coderabbit review --base <base> --include-untracked
+   review-plan-v2 --static-only --plain --base <base> \
+     && coderabbit review --base <base> --include-untracked
    ```
 
-   The order matters. gitleaks runs in the first leg and nothing leaves the machine there; the second sends the diff to a vendor. A secret scan after the egress cannot prevent anything. **Never run `review-plan-v2` without `--static-only`** — its AI reviewer legs were retired on 2026-08-28.
+   The order matters, and so does the `&&`. gitleaks runs in the first leg and nothing leaves the machine there; the second sends the diff to a vendor. A secret scan after the egress cannot prevent anything — and on two separate lines a failing scan does not stop the send either, which is the same hole with a shell prompt in the middle of it. Chained, any actionable static finding blocks the vendor leg until it is fixed; that is intended. **Never run `review-plan-v2` without `--static-only`** — its AI reviewer legs were retired on 2026-08-28.
 
    Read the `reviewing N of M changed file(s)` line, not the exit code: `[NOTHING REVIEWED]` or `reviewing 0 of N` also exits **0**, and on an uncommitted tree or a wrong `--base` that is a clean-looking gate that checked nothing. On the CodeRabbit leg, `--plain` is not a flag and exits **1**, which is also "found actionable issues", so a caller gating on the status reads a reviewer that never ran as one that flagged something; plain text is already the default. And `coderabbit auth status` has to show an account — an installed-but-signed-out CLI is a binary that cannot review.
 
@@ -71,8 +71,8 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
    - **Everything else** (lint, and CodeRabbit's findings) gets a normal follow-up commit on this branch before the push.
 
    **Then re-run step 2 against the new HEAD.** The gate reviewed the pre-fix commit, so a follow-up commit is unreviewed code by definition — and a fix commit is a normal place to add a file, paste a credential, or regress something the first pass cleared. Repeat until a run over the final HEAD is clean. That is also the honest answer to "the gate passed": it passed on the commit you are pushing, not on an earlier one.
-5. Push the branch and open a PR against the project's default branch.
-6. Wait for CI green. Poll on a paced loop; don't block synchronously.
+4. Push the branch and open a PR against the project's default branch.
+5. Wait for CI green. Poll on a paced loop; don't block synchronously.
 
 ## Phase 4: Review round — batched
 
