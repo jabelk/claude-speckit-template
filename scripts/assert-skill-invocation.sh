@@ -18,9 +18,19 @@
 # skill's frontmatter and record why there, then add it to KEEP_DISABLED below so
 # this script stops fighting it.
 #
+# Only the YAML frontmatter counts. The first version of this script grepped the
+# whole file, which made it satisfiable by prose: a SKILL.md documenting the key
+# in a fenced code block (this fleet's own docs do exactly that) could read
+# `disable-model-invocation: false` in its body while the frontmatter said
+# `true`, and the check passed. The rewrite had the mirror bug, editing the
+# documentation instead of the setting. A guard that a doc example can satisfy is
+# not a guard. Duplicate keys are rejected for the same reason: YAML takes the
+# last one, so a leading `false` with a trailing `true` is a file that lies to
+# anything reading it line-first. CodeRabbit caught this on round 2.
+#
 # Usage:  scripts/assert-skill-invocation.sh [REPO_ROOT]
-# Exit:   0 every skill asserted false (or intentionally exempt)
-#         1 a file lacks the key after the rewrite, or no skills were found
+# Exit:   0 every skill asserts false in frontmatter (or is verified exempt)
+#         1 a file's frontmatter is wrong/ambiguous/absent, or no skills found
 #         2 a required tool is missing
 set -euo pipefail
 
@@ -40,11 +50,23 @@ SKILLS_DIR="$REPO_ROOT/.claude/skills"
 KEEP_DISABLED=(ship)
 
 command -v perl >/dev/null || { echo "ERROR: perl required" >&2; exit 2; }
+command -v awk >/dev/null || { echo "ERROR: awk required" >&2; exit 2; }
 
 if [ ! -d "$SKILLS_DIR" ]; then
   echo "ERROR: no $SKILLS_DIR — nothing to assert. Wrong repo root?" >&2
   exit 1
 fi
+
+# Line number of the frontmatter's closing `---`, or empty if the file does not
+# open a frontmatter block on line 1.
+frontmatter_end() {
+  awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { print NR; exit }' "$1"
+}
+
+# Every `disable-model-invocation:` line strictly inside the frontmatter block.
+frontmatter_key_lines() {
+  awk -v end="$2" 'NR > 1 && NR < end && /^disable-model-invocation:[[:space:]]*/' "$1"
+}
 
 changed=0
 checked=0
@@ -59,6 +81,29 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
   for keep in ${KEEP_DISABLED+"${KEEP_DISABLED[@]}"}; do
     [ "$skill" = "$keep" ] && exempt=1
   done
+
+  end="$(frontmatter_end "$f")"
+  if [ -z "$end" ]; then
+    echo "ERROR: $f has no YAML frontmatter block starting on line 1." >&2
+    echo "       Refusing to guess: without frontmatter there is no setting to assert," >&2
+    echo "       and a body-only match would be prose, not configuration." >&2
+    failed=1
+    continue
+  fi
+
+  key_lines="$(frontmatter_key_lines "$f" "$end")"
+  key_count=0
+  [ -n "$key_lines" ] && key_count="$(printf '%s\n' "$key_lines" | wc -l | tr -d ' ')"
+
+  if [ "$key_count" -gt 1 ]; then
+    echo "ERROR: $f declares disable-model-invocation $key_count times in frontmatter:" >&2
+    printf '%s\n' "$key_lines" | awk '{ print "         " $0 }' >&2
+    echo "       YAML takes the LAST one, so a leading value here lies to anything that" >&2
+    echo "       reads the file line-first — including this script. Keep exactly one." >&2
+    failed=1
+    continue
+  fi
+
   if [ "$exempt" -eq 1 ]; then
     # An exemption is a CLAIM about the file, so verify it rather than trusting
     # the name. This branch used to `continue` immediately, which meant the one
@@ -66,16 +111,16 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
     # if ship's flag drifted to `false`, or the key were dropped, the script
     # printed "exempt" and exited 0 while merge, push, and deploy became
     # model-invocable. CodeRabbit caught it on the first run of this script.
-    if ! grep -q '^disable-model-invocation: true$' "$f"; then
-      echo "ERROR: $skill is listed in KEEP_DISABLED but does not set" >&2
-      echo "       'disable-model-invocation: true'. Line reads: $(grep '^disable-model-invocation:' "$f" || echo '<key absent>')" >&2
+    if [ "$key_lines" != "disable-model-invocation: true" ]; then
+      echo "ERROR: $skill is listed in KEEP_DISABLED but its frontmatter does not set" >&2
+      echo "       'disable-model-invocation: true'. Line reads: ${key_lines:-<key absent from frontmatter>}" >&2
       echo "       An exempt skill takes externally visible, hard-to-reverse actions." >&2
       echo "       Either restore the flag, or remove $skill from KEEP_DISABLED and" >&2
       echo "       delete the reason recorded there." >&2
       failed=1
       continue
     fi
-    echo "  exempt: $skill (declared slash-command-only, flag verified)"
+    echo "  exempt: $skill (declared slash-command-only, flag verified in frontmatter)"
     checked=$((checked + 1))
     exempted=$((exempted + 1))
     continue
@@ -83,15 +128,18 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
 
   # A skill with no such key is already model-invocable — that is the default.
   # Leave it alone rather than adding a key that says the default out loud.
-  grep -q '^disable-model-invocation:' "$f" || continue
+  [ "$key_count" -eq 1 ] || continue
 
   checked=$((checked + 1))
-  before="$(grep '^disable-model-invocation:' "$f")"
-  perl -pi -e 's/^disable-model-invocation: true$/disable-model-invocation: false/' "$f"
+  before="$key_lines"
+  # Bounded to the frontmatter line range. Unbounded, this rewrote any code
+  # block or prose line in the body that happened to match.
+  perl -pi -e "s/^disable-model-invocation: true\$/disable-model-invocation: false/ if \$. > 1 && \$. < $end" "$f"
 
-  if ! grep -q '^disable-model-invocation: false$' "$f"; then
-    echo "ERROR: $f still lacks 'disable-model-invocation: false' after rewrite." >&2
-    echo "       Line reads: $(grep '^disable-model-invocation:' "$f")" >&2
+  after="$(frontmatter_key_lines "$f" "$end")"
+  if [ "$after" != "disable-model-invocation: false" ]; then
+    echo "ERROR: $f frontmatter still does not read 'disable-model-invocation: false'" >&2
+    echo "       after the rewrite. Line reads: ${after:-<key absent from frontmatter>}" >&2
     echo "       Upstream format changed, or the value is something other than true/false." >&2
     failed=1
     continue
@@ -103,8 +151,9 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
   fi
 done
 
-if [ "$checked" -eq 0 ]; then
-  echo "ERROR: found no SKILL.md carrying a disable-model-invocation key under $SKILLS_DIR." >&2
+if [ "$checked" -eq 0 ] && [ "$failed" -eq 0 ]; then
+  echo "ERROR: found no SKILL.md carrying a disable-model-invocation key in frontmatter" >&2
+  echo "       under $SKILLS_DIR." >&2
   echo "       Reporting this rather than exiting 0: a run that examined nothing must" >&2
   echo "       not read the same as a run that asserted the whole fleet." >&2
   exit 1

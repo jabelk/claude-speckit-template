@@ -46,7 +46,7 @@ Keep running it because it is the half CodeRabbit does not replace: a pre-push s
 
 ```bash
 review-plan-v2 --static-only --agent --base main | jq 'select(.type == "finding")'
-coderabbit review --agent --base main
+coderabbit review --agent --base main --include-untracked
 ```
 
 The `--agent` summary record reports `static_only`, so a consumer can tell an exit 1 from the deterministic half apart from an exit 1 from a full review.
@@ -57,7 +57,7 @@ The `--agent` summary record reports `static_only`, so a consumer can tell an ex
 
 System deps: `brew install python@3.12 jq yq gitleaks markdownlint-cli actionlint shellcheck`. CR CLI: `brew install --cask coderabbit` then `coderabbit auth login --agent`. (The docs write it as `brew install coderabbit`, which works only because no formula of that name exists and brew falls back to the cask.)
 
-The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → the workflows repo's `scripts/review-plan-v2.sh`. The target is machine-specific; check it with `ls -l ~/.local/bin/review-plan-v2`. If the binary is absent, the deterministic half of the gate is simply not available — run `coderabbit review --base main` alone and say that is what happened.
+The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → the workflows repo's `scripts/review-plan-v2.sh`. The target is machine-specific; check it with `ls -l ~/.local/bin/review-plan-v2`. If the binary is absent, the deterministic half of the gate is simply not available — run `coderabbit review --base main --include-untracked` alone and say that is what happened.
 
 ## Coexistence with /review-plan v1
 
