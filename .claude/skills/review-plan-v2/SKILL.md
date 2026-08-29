@@ -168,7 +168,7 @@ Keep running it because it is the half CodeRabbit does not replace: a pre-push s
 ```bash
 set -o pipefail   # or check ${PIPESTATUS[0]} / ${pipestatus[1]} in zsh
 preflight \
-  && review-plan-v2 --static-only --agent --base "$BASE" | jq 'select(.type == "finding")' \
+  && review-plan-v2 --static-only --agent --base "$BASE" | jq 'select(.type == "finding" or .type == "summary")' \
   && preflight \
   && coderabbit review --agent --base "$BASE" --include-untracked
 ```
@@ -177,7 +177,7 @@ preflight \
 
 **And the two mechanisms are one mechanism here.** Until 2026-08-29 this block listed the legs on separate lines, so a gitleaks hit in the first was followed by the diff going to the vendor anyway — the identical defect the `&&` paragraph above spends a paragraph on, sitting in this file's own example, which is a fair measure of how well prose protects an invariant. Chained now. Note that the `&&` and the `pipefail` depend on each other in a way the plain-text form does not: `&&` reads the *pipeline's* status, and without `pipefail` that status is `jq`'s, which is 0 whether the analyzers found a credential or never ran. Dropping `set -o pipefail` from this block therefore leaves a chain that looks like a gate and gates nothing. CodeRabbit caught the missing `&&`.
 
-The `--agent` summary record reports `static_only`, so a consumer can tell an exit 1 from the deterministic half apart from an exit 1 from a full review.
+**The filter keeps the summary record, because the paragraph below is about a record the example used to discard.** It read `select(.type == "finding")` until 2026-08-29, which drops the only record that says which gate ran — so the next sentence advertised a capability the command above it destroyed, in the same file, five lines apart. The `--agent` summary record reports `static_only`, so a consumer can tell an exit 1 from the deterministic half apart from an exit 1 from a full review; verified on 2026-08-29 the stream carries exactly one non-finding record, `{"type":"summary","static_only":true,...}`. CodeRabbit caught it.
 
 ## Required env
 

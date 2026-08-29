@@ -24,6 +24,15 @@
 # vacuous pass. With it, every command whose failure is expected has to say so,
 # so the one place a non-zero status is normal (invoking the script under test)
 # captures it explicitly instead of aborting the run.
+#
+# That paragraph was aspirational until 2026-08-29: this file described the
+# protection while calling each fixture from inside an `if !` condition, which is
+# one of the two places bash turns `errexit` OFF. So the guarantee advertised here
+# was not in force for the fixtures it was written about, and a half-built repo
+# would have reported `ok`. Verified after the fix: 28 cases still pass, so no
+# fixture was silently failing on this machine — the passes were real, the harness
+# just could not have told me if they had not been. See case_run for the three
+# forms measured and which two of them do not work.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -61,9 +70,29 @@ case_run() {
   local label="$1" want_exit="$2" want_text="$3" fixture="$4"
   local repo="$TMP/case-$((passed + failed + 1))"
   mkdir -p "$repo"
-  # A fixture that failed to build is not a test result. Under `set -e` this
-  # would abort the whole run with no indication which case broke, so name it.
-  if ! "$fixture" "$repo"; then
+  # A fixture that failed to build is not a test result, so this names the case
+  # instead of aborting the run anonymously. The form is fussy for a reason:
+  # bash disables `errexit` for the condition of `if` AND for the left operand of
+  # `||`, and that suppression propagates into functions and subshells called
+  # from there. So `if ! "$fixture" "$repo"` — which is what this was until
+  # 2026-08-29 — ran the fixture with `set -e` OFF, exactly the state the header
+  # above claims it protects against: a fixture whose `mkdir` failed carried on
+  # to its remaining commands, returned its LAST command's status, and the case
+  # then ran against a half-built repo and reported `ok`.
+  #
+  # Measured 2026-08-29 on a fixture that fails first and succeeds last:
+  #   if ! f; then ...              -> fixture CONTINUED past the failure, status 0
+  #   s=0; ( set -e; f ) || s=$?    -> fixture CONTINUED past the failure, status 0
+  #   set +e; ( set -e; f ); s=$?   -> fixture ABORTED at the failure, status 1
+  # The middle form is the one that looks correct and is not; the explicit
+  # `set -e` does not survive being the left operand of `||`. CodeRabbit caught
+  # the original, in the same round it caught two more `pipefail` traps.
+  local fixture_status=0
+  set +e
+  ( set -e; "$fixture" "$repo" )
+  fixture_status=$?
+  set -e
+  if [ "$fixture_status" -ne 0 ]; then
     echo "  ERROR $label (fixture failed to build; not a pass or a fail)" >&2
     exit 2
   fi
@@ -80,7 +109,14 @@ case_run() {
 
   local why=""
   [ "$status" -eq "$want_exit" ] || why="exit $status, wanted $want_exit"
-  if [ -n "$want_text" ] && ! printf '%s' "$out" | grep -qF -- "$want_text"; then
+  # Substring match with no pipeline. `printf '%s' "$out" | grep -qF -- "$want_text"`
+  # was the previous form and is unsafe under the `pipefail` set at the top of this
+  # file: `grep -q` exits at the first match, `printf` takes SIGPIPE, the pipeline
+  # reports 141, and the `!` turns that into "output missing" — a case failing
+  # because its expected text appeared early in a long output. The failure direction
+  # is the opposite of the guard's in the skill docs (a false FAIL here, a false PASS
+  # there) and the mechanism is identical. CodeRabbit caught both in one round.
+  if [ -n "$want_text" ] && [ "${out#*"$want_text"}" = "$out" ]; then
     why="${why:+$why; }output missing: $want_text"
   fi
 
