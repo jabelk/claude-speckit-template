@@ -73,8 +73,41 @@ frontmatter_end() {
 }
 
 # Every `disable-model-invocation:` line strictly inside the frontmatter block.
+#
+# The key is matched with optional surrounding quotes and optional leading
+# indentation, because YAML accepts `"disable-model-invocation": true` as the
+# same setting. Matching only the bare form read that file as "key absent" and
+# skipped it — leaving a skill model-disabled while the script exited 0, since a
+# verified `ship` exemption is enough to keep the examined-nothing guard quiet.
+# A guard defeated by a pair of quotes is not a guard.
 frontmatter_key_lines() {
-  awk -v end="$2" 'NR > 1 && NR < end && /^disable-model-invocation:[[:space:]]*/' "$1"
+  awk -v end="$2" -v q="[\"']" '
+    NR > 1 && NR < end {
+      line = $0
+      sub(/^[ \t]+/, "", line)
+      if (line ~ "^" q "?disable-model-invocation" q "?[ \t]*:") print $0
+    }' "$1"
+}
+
+# The key's value, normalised: indentation, quotes around the key, quotes around
+# the value, trailing whitespace and a trailing `# comment` all removed. Compare
+# against this rather than against the whole raw line, so the several spellings
+# of the same setting are treated as the same setting.
+frontmatter_key_value() {
+  awk -v end="$2" -v q="[\"']" '
+    NR > 1 && NR < end {
+      line = $0
+      sub(/^[ \t]+/, "", line)
+      if (line ~ "^" q "?disable-model-invocation" q "?[ \t]*:") {
+        sub("^" q "?disable-model-invocation" q "?[ \t]*:[ \t]*", "", line)
+        sub(/[ \t]*#.*$/, "", line)
+        sub(/[ \t]+$/, "", line)
+        sub("^" q, "", line)
+        sub(q "$", "", line)
+        print line
+        exit
+      }
+    }' "$1"
 }
 
 changed=0
@@ -120,7 +153,7 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
     # if ship's flag drifted to `false`, or the key were dropped, the script
     # printed "exempt" and exited 0 while merge, push, and deploy became
     # model-invocable. CodeRabbit caught it on the first run of this script.
-    if [ "$key_lines" != "disable-model-invocation: true" ]; then
+    if [ "$(frontmatter_key_value "$f" "$end")" != "true" ]; then
       echo "ERROR: $skill is listed in KEEP_DISABLED but its frontmatter does not set" >&2
       echo "       'disable-model-invocation: true'. Line reads: ${key_lines:-<key absent from frontmatter>}" >&2
       echo "       An exempt skill takes externally visible, hard-to-reverse actions." >&2
@@ -140,24 +173,48 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
   [ "$key_count" -eq 1 ] || continue
 
   checked=$((checked + 1))
-  before="$key_lines"
-  # Bounded to the frontmatter line range. Unbounded, this rewrote any code
-  # block or prose line in the body that happened to match.
-  perl -pi -e "s/^disable-model-invocation: true\$/disable-model-invocation: false/ if \$. > 1 && \$. < $end" "$f"
+  value="$(frontmatter_key_value "$f" "$end")"
 
-  after="$(frontmatter_key_lines "$f" "$end")"
-  if [ "$after" != "disable-model-invocation: false" ]; then
-    echo "ERROR: $f frontmatter still does not read 'disable-model-invocation: false'" >&2
-    echo "       after the rewrite. Line reads: ${after:-<key absent from frontmatter>}" >&2
-    echo "       Upstream format changed, or the value is something other than true/false." >&2
+  # Already correct in any accepted spelling. Nothing to do, and nothing to say.
+  [ "$value" = "false" ] && continue
+
+  if [ "$value" != "true" ]; then
+    echo "ERROR: $f frontmatter sets disable-model-invocation to a value that is" >&2
+    echo "       neither true nor false. Line reads: $key_lines" >&2
+    echo "       Refusing to guess what was meant." >&2
     failed=1
     continue
   fi
 
-  if [ "$before" != "disable-model-invocation: false" ]; then
-    echo "  flipped: $skill"
-    changed=$((changed + 1))
+  # The rewrite handles the ONE canonical spelling and refuses the rest. The
+  # matcher above deliberately accepts quoted keys and values so that no file is
+  # silently skipped, but accepting a spelling for reading is not the same as
+  # being willing to rewrite it blind — a regex broad enough to edit every
+  # variant is a regex broad enough to mangle one. So an exotic form is reported
+  # for a human to normalise, which fails loudly instead of quietly.
+  if [ "$key_lines" != "disable-model-invocation: true" ]; then
+    echo "ERROR: $f sets disable-model-invocation: true in a non-canonical form:" >&2
+    echo "         $key_lines" >&2
+    echo "       This script only rewrites the exact form 'disable-model-invocation: true'" >&2
+    echo "       (no indentation, no quotes, no trailing comment). Normalise the line to" >&2
+    echo "       'disable-model-invocation: false' by hand." >&2
+    failed=1
+    continue
   fi
+
+  # Bounded to the frontmatter line range. Unbounded, this rewrote any code
+  # block or prose line in the body that happened to match.
+  perl -pi -e "s/^disable-model-invocation: true\$/disable-model-invocation: false/ if \$. > 1 && \$. < $end" "$f"
+
+  if [ "$(frontmatter_key_value "$f" "$end")" != "false" ]; then
+    echo "ERROR: $f frontmatter still does not read 'disable-model-invocation: false'" >&2
+    echo "       after the rewrite. Line reads: $(frontmatter_key_lines "$f" "$end")" >&2
+    failed=1
+    continue
+  fi
+
+  echo "  flipped: $skill"
+  changed=$((changed + 1))
 done
 
 if [ "$checked" -eq 0 ] && [ "$failed" -eq 0 ]; then

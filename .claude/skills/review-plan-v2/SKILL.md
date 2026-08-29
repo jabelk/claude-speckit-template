@@ -19,7 +19,15 @@ Use `--base staging` on repos with a staging branch. Both share exit-code semant
 
 **The order is also load-bearing.** gitleaks runs in the first leg and nothing leaves the machine there. The second leg sends the diff to a vendor. Running the secret scan after the egress inverts the only sequence in which it can prevent anything.
 
-`--include-untracked` is in the command rather than a footnote because without it `coderabbit review` reads **tracked changes only**. Even after a commit it is worth keeping: a file you forgot to `git add` is invisible to both legs otherwise, and a brand-new module is exactly the file most worth reviewing. Its omission looks identical to a clean pass. Files matched by `.gitignore` stay excluded either way.
+**`--include-untracked` is a detector, not coverage, and it opens the hole the ordering above closes.** Without it `coderabbit review` reads **tracked changes only**, so a file you forgot to `git add` is invisible to the review and its omission looks identical to a clean pass. With it, that file is sent to the vendor — and `review-plan-v2` has no working-tree mode, so gitleaks never scanned it. The flag therefore routes exactly the least-reviewed file in the change around the secret scan.
+
+So the untracked check happens **before** either leg, from git, not from CodeRabbit's file count — by the time the second leg reports an extra file it has already sent it:
+
+```bash
+git status --short          # nothing here should belong to the change
+```
+
+If something does, commit it and re-run the static leg first. Keep `--include-untracked` anyway, as the backstop that should find nothing; if it reports files the `reviewing N of M` line did not, that is a scan you skipped, not a bonus. Files matched by `.gitignore` stay excluded either way. If you need a secret scan over the working tree including untracked files, gitleaks does it directly and locally: `gitleaks dir .` (verified on 8.30.1).
 
 ## What changed on 2026-08-28, and why it matters to how you read this
 
@@ -62,7 +70,17 @@ The `--agent` summary record reports `static_only`, so a consumer can tell an ex
 
 System deps: `brew install python@3.12 jq yq gitleaks markdownlint-cli actionlint shellcheck`. CR CLI: `brew install --cask coderabbit` then `coderabbit auth login --agent`. The docs write it as `brew install coderabbit`, which works only because no formula of that name exists and `brew install` falls back to searching casks — observed on 2026-08-28, where the bare form printed `Would install 1 cask: coderabbit` and installed 0.7.5. Prefer the explicit `--cask` anyway, so the command does not depend on a formula of that name never appearing.
 
-The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → the workflows repo's `scripts/review-plan-v2.sh`. The target is machine-specific; check it with `ls -l ~/.local/bin/review-plan-v2`. If the binary is absent, the deterministic half of the gate is simply not available — run `coderabbit review --base main --include-untracked` alone and say that is what happened.
+The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → the workflows repo's `scripts/review-plan-v2.sh`. The target is machine-specific; check it with `ls -l ~/.local/bin/review-plan-v2`.
+
+**If the binary is absent, do not fall through to the vendor leg alone.** That was the previous advice here and it was wrong: it sends the diff off the machine with no secret scan in front of it, which is the one sequence this skill exists to preserve. gitleaks is an independent binary and does not need `review-plan-v2`, so run it directly and then proceed:
+
+```bash
+gitleaks git --log-opts="main..HEAD"   # the committed range, matching what the vendor leg sends
+gitleaks dir .                         # or the working tree, if untracked files are in play
+coderabbit review --base main --include-untracked
+```
+
+Both forms verified on gitleaks 8.30.1. If gitleaks is not installed either, stop and say the gate cannot run — the remaining lint analyzers are worth having but they are not what stands between a credential and a third party.
 
 ## Coexistence with /review-plan v1
 

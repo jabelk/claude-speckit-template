@@ -51,7 +51,7 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
 ## Phase 3: Commit + PR
 
 1. Stage and commit the change (`git push` sends commits, not working-tree edits — standalone `/ship` starts from an uncommitted tree). Verify the tree is clean after committing.
-2. **Now** run the local review gate, after the commit and before the push, and address its findings — the PR-side review is the safety net, not the first pass. Both legs, in this order:
+2. **Now** run the local review gate, after the commit and before the push — the PR-side review is the safety net, not the first pass. Both legs, in this order:
 
    ```bash
    review-plan-v2 --static-only --plain --base <base>
@@ -60,11 +60,17 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
 
    The order matters. gitleaks runs in the first leg and nothing leaves the machine there; the second sends the diff to a vendor. A secret scan after the egress cannot prevent anything. **Never run `review-plan-v2` without `--static-only`** — its AI reviewer legs were retired on 2026-08-28.
 
-   Read the `reviewing N of M changed file(s)` line, not the exit code: `[NOTHING REVIEWED]` or `reviewing 0 of N` also exits **0**, and on an uncommitted tree or a wrong `--base` that is a clean-looking gate that checked nothing. On the CodeRabbit leg, `--plain` is not a flag and exits **1**, which is also "found actionable issues", so a caller gating on the status reads a reviewer that never ran as one that flagged something; plain text is already the default. `--include-untracked` stays even post-commit, because a file you forgot to `git add` is otherwise invisible to both legs. And `coderabbit auth status` has to show an account — an installed-but-signed-out CLI is a binary that cannot review.
+   Read the `reviewing N of M changed file(s)` line, not the exit code: `[NOTHING REVIEWED]` or `reviewing 0 of N` also exits **0**, and on an uncommitted tree or a wrong `--base` that is a clean-looking gate that checked nothing. On the CodeRabbit leg, `--plain` is not a flag and exits **1**, which is also "found actionable issues", so a caller gating on the status reads a reviewer that never ran as one that flagged something; plain text is already the default. And `coderabbit auth status` has to show an account — an installed-but-signed-out CLI is a binary that cannot review.
 
-   Fix what either leg surfaces in a follow-up commit on this branch before pushing, rather than pushing a known-red secret scan.
-3. Push the branch and open a PR against the project's default branch.
-4. Wait for CI green. Poll on a paced loop; don't block synchronously.
+   **Before either leg, `git status --short` must show nothing belonging to the change.** `--include-untracked` is kept on the CodeRabbit leg as a backstop, but it is a detector rather than coverage: the static leg has no working-tree mode, so an untracked file gitleaks never scanned is precisely the file that flag would send to the vendor. Commit it and re-run the static leg instead. `gitleaks dir .` scans the working tree locally if you need that answer before committing.
+
+   **If the static leg is unavailable, do not run the vendor leg on its own** — that ships the diff with no secret scan in front of it. `gitleaks git --log-opts="<base>..HEAD"` is an independent binary and covers the same range; if that is missing too, stop and say the gate cannot run.
+
+3. Address what the gate surfaced, and route it by KIND — the remedies are not interchangeable:
+   - **A gitleaks hit is not a follow-up-commit fix.** A later commit that deletes the credential leaves it intact in the earlier commit, and `git push` sends the whole branch, so the secret reaches the remote regardless. Treat it as a live disclosure: **rotate or revoke the credential first**, on the assumption it is already compromised, then remove it from the unpushed history (`git commit --amend` if it is the tip, an interactive rebase or a fresh branch otherwise) and re-run the scan on the rewritten range before pushing anything. History rewriting is destructive, so confirm the branch is not shared and the work is recoverable — and if the commit was already pushed, rotation is the only remedy that still works.
+   - **Everything else** (lint, and CodeRabbit's findings) gets a normal follow-up commit on this branch before the push.
+5. Push the branch and open a PR against the project's default branch.
+6. Wait for CI green. Poll on a paced loop; don't block synchronously.
 
 ## Phase 4: Review round — batched
 
