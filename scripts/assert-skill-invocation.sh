@@ -126,11 +126,32 @@ frontmatter_quoted_keys() {
 }
 
 # Every frontmatter line that mentions the key in any form — rule B's input.
-# Case-insensitive, because YAML keys are case-sensitive but a human typo is the
-# thing worth reporting rather than silently ignoring.
+#
+# Matched on a NORMALISED copy of the line: lowercased, with everything that is
+# not a letter or digit removed. So `disable_model_invocation`,
+# `Disable-Model-Invocation`, and `disable model invocation` all reach rule B and
+# are refused, rather than reading as an absent key.
+#
+# That last part is the point. Claude Code reads the hyphenated key and nothing
+# else, so an underscored one is inert — a skill whose author wrote
+# `disable_model_invocation: true` is model-invocable, believes it is not, and got
+# no warning from this script because the matcher saw no key at all. The failure
+# is the same silent skip as the escape forms, arrived at by typo instead of by
+# encoding, and it is why this normalises rather than adding underscores to a
+# pattern: the next near-spelling should be caught by the rule, not by a fifth
+# review round. CodeRabbit caught it.
+#
+# Widening what gets REFUSED cannot widen what gets accepted — rule C still
+# compares against two literals. Verified across every SKILL.md in the fleet:
+# the normalised match finds only lines that are already canonical, so no
+# legitimate frontmatter is caught by it.
 frontmatter_key_mentions() {
   awk -v end="$2" '
-    NR > 1 && NR < end && tolower($0) ~ /disable-model-invocation/ { print $0 }' "$1"
+    NR > 1 && NR < end {
+      norm = tolower($0)
+      gsub(/[^a-z0-9]/, "", norm)
+      if (norm ~ /disablemodelinvocation/) print $0
+    }' "$1"
 }
 
 # The accepted forms, exactly — rule C. String equality against a literal.
@@ -208,7 +229,10 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
     echo "         disable-model-invocation: true" >&2
     echo "         disable-model-invocation: false" >&2
     echo "       Indentation is not cosmetic here: a key nested under another mapping" >&2
-    echo "       is a different key, and Claude Code reads the ROOT one. Normalise by hand." >&2
+    echo "       is a different key, and Claude Code reads the ROOT one. Nor is the" >&2
+    echo "       spelling: Claude Code reads the hyphenated key only, so an underscored" >&2
+    echo "       or differently-cased one is inert and does nothing at all." >&2
+    echo "       Normalise the line by hand." >&2
     failed=1
     continue
   fi

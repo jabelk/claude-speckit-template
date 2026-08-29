@@ -16,7 +16,15 @@
 # Usage:  scripts/test-assert-skill-invocation.sh
 # Exit:   0 every case passed
 #         1 at least one case failed
-set -uo pipefail
+#
+# `-e` is on deliberately, and it constrains how case_run is written. Without it
+# a fixture whose `mkdir` or redirect failed would fall through and the case
+# would run the script under test against a HALF-BUILT repo — most likely one
+# with fewer skills than the case is about, which is the exact shape of a
+# vacuous pass. With it, every command whose failure is expected has to say so,
+# so the one place a non-zero status is normal (invoking the script under test)
+# captures it explicitly instead of aborting the run.
+set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 UNDER_TEST="$HERE/assert-skill-invocation.sh"
@@ -53,11 +61,22 @@ case_run() {
   local label="$1" want_exit="$2" want_text="$3" fixture="$4"
   local repo="$TMP/case-$((passed + failed + 1))"
   mkdir -p "$repo"
-  "$fixture" "$repo"
+  # A fixture that failed to build is not a test result. Under `set -e` this
+  # would abort the whole run with no indication which case broke, so name it.
+  if ! "$fixture" "$repo"; then
+    echo "  ERROR $label (fixture failed to build; not a pass or a fail)" >&2
+    exit 2
+  fi
 
+  # The one command whose non-zero status is normal. `if !` keeps `set -e` from
+  # treating a refusal — the behaviour most of these cases exist to prove — as a
+  # harness crash.
   local out status
-  out="$(bash "$UNDER_TEST" "$repo" 2>&1)"
-  status=$?
+  if out="$(bash "$UNDER_TEST" "$repo" 2>&1)"; then
+    status=0
+  else
+    status=$?
+  fi
 
   local why=""
   [ "$status" -eq "$want_exit" ] || why="exit $status, wanted $want_exit"
@@ -204,6 +223,35 @@ f_trailing_space() {
   make_skill "$1" "tspace" "name: tspace\ndisable-model-invocation: true "
 }
 case_run "rule B: trailing whitespace refused" 1 "in a form this" f_trailing_space
+
+# Near-spellings. Claude Code reads the hyphenated key and nothing else, so each
+# of these is INERT — the skill is model-invocable while its author believes it is
+# not. The matcher previously saw no key at all and said nothing.
+f_underscore_key() {
+  baseline "$1"
+  make_skill "$1" "usc" "name: usc\ndisable_model_invocation: true"
+}
+case_run "rule B: underscored key refused, not read as absent" 1 "spelling" f_underscore_key
+
+f_mixed_case_key() {
+  baseline "$1"
+  make_skill "$1" "case" "name: case\nDisable-Model-Invocation: true"
+}
+case_run "rule B: mixed-case key refused" 1 "spelling" f_mixed_case_key
+
+f_spaced_key() {
+  baseline "$1"
+  make_skill "$1" "spaced" "name: spaced\ndisable model invocation: true"
+}
+case_run "rule B: space-separated key refused" 1 "spelling" f_spaced_key
+
+f_ship_underscore_only() {
+  baseline "$1"
+  # The exemption must not be satisfiable by an inert spelling either: /ship here
+  # is model-invocable, and merge, push and deploy are what that exempts.
+  make_skill "$1" "ship" "name: ship\ndisable_model_invocation: true"
+}
+case_run "ship exemption is NOT satisfied by an underscored key" 1 "spelling" f_ship_underscore_only
 
 # ---------------------------------------------------------------------------
 # Frontmatter only — a documented example in the BODY is prose, not config.
