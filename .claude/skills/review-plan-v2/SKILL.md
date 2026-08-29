@@ -5,16 +5,21 @@ description: Pre-push gate for the current branch's diff. Runs review-plan-v2's 
 
 # /review-plan-v2
 
-Gate the current branch before pushing. Two commands, in this order, from the repo root:
+**Commit the change first.** Then two commands, in this order, from the repo root:
 
 ```bash
+# Prerequisite: the change is COMMITTED. The first leg reads the committed diff.
 review-plan-v2 --static-only --plain --base main            # deterministic only; nothing is billed
 coderabbit review --base main --include-untracked           # plain text is its default; --plain is NOT a flag
 ```
 
 Use `--base staging` on repos with a staging branch. Both share exit-code semantics: `0` clean, `1` actionable, `2` tool error. Address what either surfaces before pushing.
 
-`--include-untracked` is in the command rather than a footnote because without it `coderabbit review` reads **tracked changes only**, and a gate run before anything is staged silently skips every new file. That is the worst failure shape available here: a brand-new module is exactly the file most worth reviewing, and its omission looks identical to a clean pass. Files matched by `.gitignore` stay excluded either way. `review-plan-v2` reads the committed diff and has no equivalent flag, so its half still needs the work committed — a `reviewing 0 of 0` line usually means uncommitted changes, not a clean tree.
+**The commit prerequisite is load-bearing, not tidiness.** `review-plan-v2` has no working-tree mode. Run it on uncommitted work and it prints `reviewing 0 of 0` and exits **0** — a clean-looking gate that ran no secret scan and no lint over the change. So if the `reviewing N of M changed file(s)` line reads zero while you have work in progress, that is the diagnosis; commit and re-run rather than reading it as a pass.
+
+**The order is also load-bearing.** gitleaks runs in the first leg and nothing leaves the machine there. The second leg sends the diff to a vendor. Running the secret scan after the egress inverts the only sequence in which it can prevent anything.
+
+`--include-untracked` is in the command rather than a footnote because without it `coderabbit review` reads **tracked changes only**. Even after a commit it is worth keeping: a file you forgot to `git add` is invisible to both legs otherwise, and a brand-new module is exactly the file most worth reviewing. Its omission looks identical to a clean pass. Files matched by `.gitignore` stay excluded either way.
 
 ## What changed on 2026-08-28, and why it matters to how you read this
 
@@ -55,7 +60,7 @@ The `--agent` summary record reports `static_only`, so a consumer can tell an ex
 
 **None.** No provider key is needed in static-only mode; a run with every key unset behaves identically. `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY` all enable nothing here now.
 
-System deps: `brew install python@3.12 jq yq gitleaks markdownlint-cli actionlint shellcheck`. CR CLI: `brew install --cask coderabbit` then `coderabbit auth login --agent`. (The docs write it as `brew install coderabbit`, which works only because no formula of that name exists and brew falls back to the cask.)
+System deps: `brew install python@3.12 jq yq gitleaks markdownlint-cli actionlint shellcheck`. CR CLI: `brew install --cask coderabbit` then `coderabbit auth login --agent`. The docs write it as `brew install coderabbit`, which works only because no formula of that name exists and `brew install` falls back to searching casks — observed on 2026-08-28, where the bare form printed `Would install 1 cask: coderabbit` and installed 0.7.5. Prefer the explicit `--cask` anyway, so the command does not depend on a formula of that name never appearing.
 
 The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → the workflows repo's `scripts/review-plan-v2.sh`. The target is machine-specific; check it with `ls -l ~/.local/bin/review-plan-v2`. If the binary is absent, the deterministic half of the gate is simply not available — run `coderabbit review --base main --include-untracked` alone and say that is what happened.
 

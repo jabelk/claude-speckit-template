@@ -45,15 +45,24 @@ Walk the diff against these patterns before opening the PR. Each PR-side review 
 
 1. Run the project's lint, format, and test commands as SEPARATE, UNPIPED commands. Pipes mask exit codes — a `cmd | tail` that "passed" has shipped red CI before. If piping is unavoidable, `set -o pipefail` or check `${PIPESTATUS[0]}`. Every gate must exit 0.
 2. `git status --short` and `git diff HEAD --stat` — the plain `git diff` misses staged and untracked files; confirm no unintended changes anywhere in the tree.
-3. Run the review leg that works on an uncommitted tree, and address its findings now — the PR-side review is the safety net, not the first pass. That is `coderabbit review --base <base> --include-untracked`. Plain text is the default; `--plain` is not a flag and exits **1**, which is also "found actionable issues", so a caller gating on the status reads a reviewer that never ran as one that flagged something. `--include-untracked` is mandatory here: this phase runs before Phase 3 stages anything, so without it every file the change ADDS is silently skipped, and that omission is indistinguishable from a clean pass. `coderabbit auth status` has to show an account — an installed-but-signed-out CLI is a binary that cannot review.
-
-   **The other leg cannot run yet, and that is why it is in Phase 3.** `review-plan-v2 --static-only` reads the **committed** diff and has no working-tree mode, so running it here reports `reviewing 0 of 0` and exits 0 on a change it never looked at. An earlier version of this skill asked for both legs at this step and then told you to commit first, which is not satisfiable in this phase order.
+3. **The local review gate is in Phase 3, after the commit — not here.** `review-plan-v2 --static-only` reads the **committed** diff and has no working-tree mode, so run at this point it reports `reviewing 0 of 0` and exits 0 on a change it never looked at. An earlier version of this skill asked for it here and then said to commit first, which is not satisfiable in this phase order. Its sibling leg sends the diff to a vendor and the secret scan lives in the leg that needs the commit, so splitting them across the commit would put the egress before the scan.
 4. **Web-UI changes get a browser walkthrough, unprompted.** If the change touches anything rendered in a browser, walk the affected flows as a user would (Claude in Chrome when available: navigate, click, fill forms, read the rendered result). API-level smoke tests verify the API, not the feature — they do not satisfy this gate.
 
 ## Phase 3: Commit + PR
 
 1. Stage and commit the change (`git push` sends commits, not working-tree edits — standalone `/ship` starts from an uncommitted tree). Verify the tree is clean after committing.
-2. **Now** run the deterministic leg, after the commit and before the push: `review-plan-v2 --static-only --plain --base <base>`. Analyzers only, nothing billed, no diff leaves the machine — **never run it without `--static-only`**; its AI reviewer legs were retired on 2026-08-28. It reads the committed diff, which is why it waits until here. Read the `reviewing N of M changed file(s)` line, not the exit code: `[NOTHING REVIEWED]` or `reviewing 0 of N` also exits 0, and usually means the wrong `--base` rather than a clean tree. Its findings are gitleaks and lint, so fix them in a follow-up commit on this branch before pushing rather than pushing a known-red secret scan.
+2. **Now** run the local review gate, after the commit and before the push, and address its findings — the PR-side review is the safety net, not the first pass. Both legs, in this order:
+
+   ```bash
+   review-plan-v2 --static-only --plain --base <base>
+   coderabbit review --base <base> --include-untracked
+   ```
+
+   The order matters. gitleaks runs in the first leg and nothing leaves the machine there; the second sends the diff to a vendor. A secret scan after the egress cannot prevent anything. **Never run `review-plan-v2` without `--static-only`** — its AI reviewer legs were retired on 2026-08-28.
+
+   Read the `reviewing N of M changed file(s)` line, not the exit code: `[NOTHING REVIEWED]` or `reviewing 0 of N` also exits **0**, and on an uncommitted tree or a wrong `--base` that is a clean-looking gate that checked nothing. On the CodeRabbit leg, `--plain` is not a flag and exits **1**, which is also "found actionable issues", so a caller gating on the status reads a reviewer that never ran as one that flagged something; plain text is already the default. `--include-untracked` stays even post-commit, because a file you forgot to `git add` is otherwise invisible to both legs. And `coderabbit auth status` has to show an account — an installed-but-signed-out CLI is a binary that cannot review.
+
+   Fix what either leg surfaces in a follow-up commit on this branch before pushing, rather than pushing a known-red secret scan.
 3. Push the branch and open a PR against the project's default branch.
 4. Wait for CI green. Poll on a paced loop; don't block synchronously.
 

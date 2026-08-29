@@ -28,6 +28,15 @@
 # last one, so a leading `false` with a trailing `true` is a file that lies to
 # anything reading it line-first. CodeRabbit caught this on round 2.
 #
+# This script FIXES rather than merely validating, and that is deliberate. Review
+# has proposed twice that it drop the rewrite and just fail on a `true`. Declined:
+# failing would hand the operator back exactly the chore this replaced — 11 files
+# reverted by hand per project, once per re-vendor — and a gate whose remedy is
+# "go edit 11 files" is one that gets skipped. It still fails loudly on anything
+# it cannot repair: a value that is neither `true` nor `false`, a duplicate key,
+# absent frontmatter, or a rewrite that did not take. What it repairs it names, one
+# `flipped:` line per file, so a run is never silent about having changed the tree.
+#
 # Usage:  scripts/assert-skill-invocation.sh [REPO_ROOT]
 # Exit:   0 every skill asserts false in frontmatter (or is verified exempt)
 #         1 a file's frontmatter is wrong/ambiguous/absent, or no skills found
