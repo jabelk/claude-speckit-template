@@ -212,6 +212,34 @@ f_hex_escape() {
 }
 case_run "rule A: \\xXX-escaped key refused" 1 "quotes a key in its frontmatter" f_hex_escape
 
+f_flow_mapping_key() {
+  baseline "$1"
+  # The line starts with `{`, not with a quote, so rule A's start-of-line test
+  # never saw it — and the `i` escape hid the key from rule B's normalised
+  # match. Measured on 2026-08-29 against the pre-fix script: this fixture alone
+  # produced `OK: ... 1 rely on the default` at exit **0**, with the skill left
+  # model-DISABLED. The exact silent skip the three rules exist to prevent,
+  # reached through the one key position they did not cover.
+  make_skill "$1" "flow" '{"d\\u0069sable-model-invocation": true, "name": "flow"}'
+}
+case_run "rule A: escaped key inside a flow mapping refused" 1 "quotes a key in its frontmatter" f_flow_mapping_key
+
+f_explicit_key() {
+  baseline "$1"
+  # YAML's explicit-key indicator is the other non-start-of-line key position.
+  # The unescaped spelling was already refused by rule B; escaped, it was not.
+  make_skill "$1" "explicit" '? "d\\u0069sable-model-invocation"\n: true\nname: explicit'
+}
+case_run "rule A: escaped key after an explicit-key indicator refused" 1 "quotes a key in its frontmatter" f_explicit_key
+
+f_escape_unquoted() {
+  baseline "$1"
+  # An escape outside quotes is still a form this script will not decode, and the
+  # position it sits in is not enumerable. Refused on sight rather than read.
+  make_skill "$1" "esc" 'name: esc\ndescription: d\\u0069sable-model-invocation'
+}
+case_run "rule A: an escape sequence anywhere is refused" 1 "quotes a key in its frontmatter" f_escape_unquoted
+
 f_quoted_value_only() {
   baseline "$1"
   # A quoted VALUE is not a quoted key. This must NOT trip rule A — the fleet's

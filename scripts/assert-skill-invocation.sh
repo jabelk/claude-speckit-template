@@ -100,10 +100,14 @@ frontmatter_end() {
 #
 # The three rules, in the order they are applied:
 #
-#   A. A quoted KEY anywhere in the frontmatter is refused outright, whatever it
-#      spells. Verified against every SKILL.md in this fleet: no legitimate
-#      frontmatter quotes a key, so this costs nothing. It is what makes escape
-#      handling unnecessary — an escape can only appear inside quotes.
+#   A. A quoted KEY in any key position is refused outright, whatever it spells —
+#      the start of a line, inside a flow mapping, or after an explicit-key `?` —
+#      as is any escape sequence anywhere in the frontmatter. Verified against
+#      every SKILL.md in this fleet: no legitimate frontmatter quotes a key,
+#      writes a flow mapping, or contains an escape, so this costs nothing. It is
+#      what makes escape handling unnecessary. This rule said "anywhere" and meant
+#      "at the start of a line" until 2026-08-29, and the gap was exploitable —
+#      see the function.
 #   B. Any line mentioning the key that is not one of the two accepted byte
 #      sequences is refused: indentation, trailing comments, quoted values,
 #      `false#text`, anything. Refusing is safe where guessing is not.
@@ -114,14 +118,40 @@ frontmatter_end() {
 # against a literal, which is the one form of matching that cannot be talked
 # into accepting something else.
 
-# Frontmatter lines whose KEY is quoted — rule A. Matches a leading quote after
-# optional indentation, so a quoted VALUE (`author: "jabelk"`) is untouched.
+# Frontmatter lines whose KEY is quoted — rule A. A quoted VALUE
+# (`author: "jabelk"`) is untouched, because the quote there is not in a key
+# position.
+#
+# YAML has more key positions than the start of a line, and until 2026-08-29 this
+# function only knew that one. Measured on that date: a frontmatter of
+# `{"disable-model-invocation": true, "name": "flow"}` passed the whole
+# script — rule A never saw a leading quote because the line starts with `{`, and
+# rule B never saw the key because the `i` escape hides the bytes it
+# normalises. The script exited **0** reporting `1 rely on the default` while that
+# skill was in fact model-DISABLED, which is verbatim the silent skip these three
+# rules exist to prevent, reached through the one position they did not cover.
+# CodeRabbit caught it.
+#
+# So every key position is refused, and the whole line is refused rather than
+# parsed — a flow mapping is a place a key can hide, not a construct this script
+# should learn to read. Verified across all 299 SKILL.md files on this machine:
+# not one writes a flow mapping or an escape anywhere in its frontmatter, so
+# refusing both costs nothing real.
 frontmatter_quoted_keys() {
   awk -v end="$2" '
     NR > 1 && NR < end {
       line = $0
       sub(/^[ \t]+/, "", line)
-      if (line ~ /^["'\''"]/) print $0
+      # Position 1: start of the line — an ordinary block-mapping key.
+      if (line ~ /^["'\''"]/) { print $0; next }
+      # Position 2: after the explicit-key indicator, `? "key"` on its own line.
+      if (line ~ /^[?]([ \t]|$)/) { print $0; next }
+      # Position 3: inside a flow mapping, after `{` or after a `,` within it.
+      if (line ~ /[{]/ && line ~ /["'\''"]/) { print $0; next }
+      # And an escape sequence anywhere, quoted or not: it can only be a form
+      # this script will not decode, and decoding one wrongly is what rounds
+      # one through three of this file each did.
+      if (line ~ /\\[uUx]/) { print $0; next }
     }' "$1"
 }
 
@@ -198,13 +228,18 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
   # than merely current with the ones found so far.
   quoted="$(frontmatter_quoted_keys "$f" "$end")"
   if [ -n "$quoted" ]; then
-    echo "ERROR: $f quotes a key in its frontmatter:" >&2
+    echo "ERROR: $f quotes a key in its frontmatter, or writes one somewhere this" >&2
+    echo "       script refuses to read:" >&2
     printf '%s\n' "$quoted" | awk '{ print "         " $0 }' >&2
     echo "       Refused without interpreting it. A double-quoted YAML key may contain" >&2
     echo "       \\uXXXX, \\UXXXXXXXX or \\xXX escapes, so a quoted key can spell" >&2
     echo "       disable-model-invocation without looking like it — three review rounds" >&2
     echo "       found three escape forms this script decoded wrongly, each one a silent" >&2
     echo "       skip. It no longer decodes any. Write frontmatter keys bare." >&2
+    echo "       The same goes for a key in a flow mapping ({\"key\": true}) or after an" >&2
+    echo "       explicit-key indicator (? \"key\"): those are key positions that are not" >&2
+    echo "       the start of a line, and an escaped key sitting in one passed this whole" >&2
+    echo "       script until 2026-08-29. Write frontmatter as plain block mappings." >&2
     failed=1
     continue
   fi
