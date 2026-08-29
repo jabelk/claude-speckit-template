@@ -33,9 +33,10 @@
 # failing would hand the operator back exactly the chore this replaced — 11 files
 # reverted by hand per project, once per re-vendor — and a gate whose remedy is
 # "go edit 11 files" is one that gets skipped. It still fails loudly on anything
-# it cannot repair: a value that is neither `true` nor `false`, a duplicate key,
-# absent frontmatter, or a rewrite that did not take. What it repairs it names, one
-# `flipped:` line per file, so a run is never silent about having changed the tree.
+# it cannot repair: any spelling of the key other than the two it accepts, a
+# duplicate key, absent frontmatter, or a rewrite that did not take. What it
+# repairs it names, one `flipped:` line per file, so a run is never silent about
+# having changed the tree.
 #
 # Usage:  scripts/assert-skill-invocation.sh [REPO_ROOT]
 # Exit:   0 every skill asserts false in frontmatter (or is verified exempt)
@@ -72,86 +73,90 @@ frontmatter_end() {
   awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { print NR; exit }' "$1"
 }
 
-# Every `disable-model-invocation:` line strictly inside the frontmatter block,
-# and (second function) that key's value.
+# Recognising this key stopped being a pattern-matching problem and became a
+# YAML-decoding problem, and three review rounds found three different ways the
+# decoding was wrong — each one a SILENT skip that let the script exit 0 with a
+# skill still model-disabled, because a verified `ship` exemption is enough to
+# keep the examined-nothing guard quiet:
 #
-# Both go through one perl matcher, because deciding whether a line declares
-# this key is a decoding problem rather than a pattern-matching one, and it has
-# already been got wrong twice in the same direction:
+#   1. Matching only bare `disable-model-invocation:` missed
+#      `"disable-model-invocation": true`.
+#   2. Allowing optional quotes still missed
+#      `"disable-model-invocation": true` — a double-quoted YAML scalar
+#      decodes \uXXXX.
+#   3. Decoding \uXXXX and \xXX still missed \UXXXXXXXX, the eight-digit form.
+#      And `disable-model-invocation: false#text` is the *string* `false#text`
+#      in YAML, because `#` only opens a comment after whitespace — yet it
+#      normalised to `false` and read as correctly set. And an indented
+#      `disable-model-invocation: true` nested under `metadata:` satisfied the
+#      /ship exemption while the ROOT key was absent, which means merge, push
+#      and deploy were model-invocable and this script said they were not.
 #
-#   1. Matching only the bare `disable-model-invocation:` read
-#      `"disable-model-invocation": true` as "key absent" and skipped the file —
-#      leaving a skill model-disabled while the script exited 0, because a
-#      verified `ship` exemption is enough to keep the examined-nothing guard
-#      quiet. A guard defeated by a pair of quotes is not a guard.
-#   2. Adding optional quotes still missed
-#      `"disable-model-invocation": true`, which is valid YAML for the same
-#      key: a double-quoted scalar decodes \uXXXX and \xXX escapes. Same silent
-#      skip, same exit 0. CodeRabbit caught this one.
+# Round three is where the approach was wrong rather than incomplete: each fix
+# decoded one more escape form, and YAML has more. So the matcher no longer
+# decodes anything. It accepts exactly two byte sequences at column zero and
+# REFUSES everything else that could conceivably be this key, which is immune to
+# every escape form because it never interprets one.
 #
-# So the key is decoded before it is compared: quotes stripped, and inside
-# double quotes the escapes YAML actually defines are resolved. A line whose
-# decoded key matches is REPORTED, not accepted — an exotic spelling then hits
-# the non-canonical-form guard further down and fails loudly, because being
-# willing to recognise a form is not the same as being willing to rewrite it.
-# That keeps this function's job "see everything" and leaves "edit only what is
-# unambiguous" where it belongs.
-_frontmatter_match() {
-  # $1 file, $2 frontmatter end line, $3 mode: "lines" | "value"
-  perl -e '
-    my ($file, $end, $mode) = @ARGV;
-    open my $fh, "<", $file or exit 0;
-    my $target = "disable-model-invocation";
-    while (my $raw = <$fh>) {
-      last if $. >= $end;
-      next if $. <= 1;
-      chomp(my $line = $raw);
-      my $rest = $line;
-      $rest =~ s/^[ \t]+//;
+# The three rules, in the order they are applied:
+#
+#   A. A quoted KEY anywhere in the frontmatter is refused outright, whatever it
+#      spells. Verified against every SKILL.md in this fleet: no legitimate
+#      frontmatter quotes a key, so this costs nothing. It is what makes escape
+#      handling unnecessary — an escape can only appear inside quotes.
+#   B. Any line mentioning the key that is not one of the two accepted byte
+#      sequences is refused: indentation, trailing comments, quoted values,
+#      `false#text`, anything. Refusing is safe where guessing is not.
+#   C. Only `disable-model-invocation: true` and
+#      `disable-model-invocation: false`, at column zero, are accepted.
+#
+# awk only, and no `sub` on the matched text: the comparison is string equality
+# against a literal, which is the one form of matching that cannot be talked
+# into accepting something else.
 
-      my ($key, $val);
-      if ($rest =~ /^"((?:[^"\\]|\\.)*)"[ \t]*:[ \t]*(.*)$/) {
-        ($key, $val) = ($1, $2);
-        # YAML double-quoted scalars decode these; anything else stays literal.
-        $key =~ s/\\u([0-9a-fA-F]{4})/chr(hex($1))/ge;
-        $key =~ s/\\x([0-9a-fA-F]{2})/chr(hex($1))/ge;
-        $key =~ s/\\(.)/$1/g;
-      } elsif ($rest =~ /^'"'"'([^'"'"']*)'"'"'[ \t]*:[ \t]*(.*)$/) {
-        ($key, $val) = ($1, $2);   # single quotes: no escape processing in YAML
-      } elsif ($rest =~ /^([^:\s]+)[ \t]*:[ \t]*(.*)$/) {
-        ($key, $val) = ($1, $2);
-      } else {
-        next;
-      }
-      next unless $key eq $target;
-
-      if ($mode eq "lines") { print "$line\n"; next; }
-
-      $val =~ s/[ \t]*#.*$//;
-      $val =~ s/[ \t]+$//;
-      $val =~ s/^"(.*)"$/$1/ or $val =~ s/^'"'"'(.*)'"'"'$/$1/;
-      print "$val\n";
-      exit 0;
-    }
-  ' "$1" "$2" "$3"
+# Frontmatter lines whose KEY is quoted — rule A. Matches a leading quote after
+# optional indentation, so a quoted VALUE (`author: "jabelk"`) is untouched.
+frontmatter_quoted_keys() {
+  awk -v end="$2" '
+    NR > 1 && NR < end {
+      line = $0
+      sub(/^[ \t]+/, "", line)
+      if (line ~ /^["'\''"]/) print $0
+    }' "$1"
 }
 
-frontmatter_key_lines() { _frontmatter_match "$1" "$2" lines; }
+# Every frontmatter line that mentions the key in any form — rule B's input.
+# Case-insensitive, because YAML keys are case-sensitive but a human typo is the
+# thing worth reporting rather than silently ignoring.
+frontmatter_key_mentions() {
+  awk -v end="$2" '
+    NR > 1 && NR < end && tolower($0) ~ /disable-model-invocation/ { print $0 }' "$1"
+}
 
-# The key's value, normalised: indentation, quotes around the key, quotes around
-# the value, trailing whitespace and a trailing `# comment` all removed. Compare
-# against this rather than against the whole raw line, so the several spellings
-# of the same setting are treated as the same setting.
-frontmatter_key_value() { _frontmatter_match "$1" "$2" value; }
+# The accepted forms, exactly — rule C. String equality against a literal.
+frontmatter_canonical_lines() {
+  awk -v end="$2" '
+    NR > 1 && NR < end &&
+    ($0 == "disable-model-invocation: true" || $0 == "disable-model-invocation: false") \
+      { print $0 }' "$1"
+}
+
+# The value of the single canonical line: `true` or `false`, nothing else can
+# reach here.
+frontmatter_key_value() {
+  frontmatter_canonical_lines "$1" "$2" | awk 'NR == 1 { print $2 }'
+}
 
 changed=0
-checked=0
+discovered=0
+explicit=0
 exempted=0
 failed=0
 
 for f in "$SKILLS_DIR"/*/SKILL.md; do
   [ -f "$f" ] || continue
   skill="$(basename "$(dirname "$f")")"
+  discovered=$((discovered + 1))
 
   exempt=0
   for keep in ${KEEP_DISABLED+"${KEEP_DISABLED[@]}"}; do
@@ -167,9 +172,49 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
     continue
   fi
 
-  key_lines="$(frontmatter_key_lines "$f" "$end")"
-  key_count=0
-  [ -n "$key_lines" ] && key_count="$(printf '%s\n' "$key_lines" | wc -l | tr -d ' ')"
+  # Rule A. A quoted key is refused before anything tries to read what it
+  # spells, which is what makes this script immune to YAML escape forms rather
+  # than merely current with the ones found so far.
+  quoted="$(frontmatter_quoted_keys "$f" "$end")"
+  if [ -n "$quoted" ]; then
+    echo "ERROR: $f quotes a key in its frontmatter:" >&2
+    printf '%s\n' "$quoted" | awk '{ print "         " $0 }' >&2
+    echo "       Refused without interpreting it. A double-quoted YAML key may contain" >&2
+    echo "       \\uXXXX, \\UXXXXXXXX or \\xXX escapes, so a quoted key can spell" >&2
+    echo "       disable-model-invocation without looking like it — three review rounds" >&2
+    echo "       found three escape forms this script decoded wrongly, each one a silent" >&2
+    echo "       skip. It no longer decodes any. Write frontmatter keys bare." >&2
+    failed=1
+    continue
+  fi
+
+  # Rule B. Every mention that is not one of the two accepted byte sequences is
+  # refused. Catches indentation (a key nested under `metadata:` is a DIFFERENT
+  # key, and one such line previously satisfied the /ship exemption while the
+  # root key was absent), trailing comments, `false#text` — which is the string
+  # "false#text" in YAML, since `#` only opens a comment after whitespace — and
+  # quoted or mismatched-quote values like "true'.
+  mentions="$(frontmatter_key_mentions "$f" "$end")"
+  canonical="$(frontmatter_canonical_lines "$f" "$end")"
+  mention_count=0; canonical_count=0
+  [ -n "$mentions" ] && mention_count="$(printf '%s\n' "$mentions" | wc -l | tr -d ' ')"
+  [ -n "$canonical" ] && canonical_count="$(printf '%s\n' "$canonical" | wc -l | tr -d ' ')"
+
+  if [ "$mention_count" -ne "$canonical_count" ]; then
+    echo "ERROR: $f frontmatter mentions disable-model-invocation in a form this" >&2
+    echo "       script will not interpret:" >&2
+    printf '%s\n' "$mentions" | awk '{ print "         " $0 }' >&2
+    echo "       Accepted, exactly and at column zero, with no trailing text:" >&2
+    echo "         disable-model-invocation: true" >&2
+    echo "         disable-model-invocation: false" >&2
+    echo "       Indentation is not cosmetic here: a key nested under another mapping" >&2
+    echo "       is a different key, and Claude Code reads the ROOT one. Normalise by hand." >&2
+    failed=1
+    continue
+  fi
+
+  key_lines="$canonical"
+  key_count="$canonical_count"
 
   if [ "$key_count" -gt 1 ]; then
     echo "ERROR: $f declares disable-model-invocation $key_count times in frontmatter:" >&2
@@ -197,44 +242,31 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
       continue
     fi
     echo "  exempt: $skill (declared slash-command-only, flag verified in frontmatter)"
-    checked=$((checked + 1))
+    explicit=$((explicit + 1))
     exempted=$((exempted + 1))
     continue
   fi
 
   # A skill with no such key is already model-invocable — that is the default.
-  # Leave it alone rather than adding a key that says the default out loud.
+  # Leave it alone rather than adding a key that says the default out loud. It
+  # still counted toward `discovered`, which is what the examined-nothing guard
+  # below reads: the earlier version counted only files carrying the key, so a
+  # fleet where every skill correctly omits it — the end state this script is
+  # driving toward — failed as though nothing had been looked at.
   [ "$key_count" -eq 1 ] || continue
 
-  checked=$((checked + 1))
+  explicit=$((explicit + 1))
   value="$(frontmatter_key_value "$f" "$end")"
 
-  # Already correct in any accepted spelling. Nothing to do, and nothing to say.
+  # Already correct. Nothing to do, and nothing to say.
   [ "$value" = "false" ] && continue
 
-  if [ "$value" != "true" ]; then
-    echo "ERROR: $f frontmatter sets disable-model-invocation to a value that is" >&2
-    echo "       neither true nor false. Line reads: $key_lines" >&2
-    echo "       Refusing to guess what was meant." >&2
-    failed=1
-    continue
-  fi
-
-  # The rewrite handles the ONE canonical spelling and refuses the rest. The
-  # matcher above deliberately accepts quoted keys and values so that no file is
-  # silently skipped, but accepting a spelling for reading is not the same as
-  # being willing to rewrite it blind — a regex broad enough to edit every
-  # variant is a regex broad enough to mangle one. So an exotic form is reported
-  # for a human to normalise, which fails loudly instead of quietly.
-  if [ "$key_lines" != "disable-model-invocation: true" ]; then
-    echo "ERROR: $f sets disable-model-invocation: true in a non-canonical form:" >&2
-    echo "         $key_lines" >&2
-    echo "       This script only rewrites the exact form 'disable-model-invocation: true'" >&2
-    echo "       (no indentation, no quotes, no trailing comment). Normalise the line to" >&2
-    echo "       'disable-model-invocation: false' by hand." >&2
-    failed=1
-    continue
-  fi
+  # `value` can only be `true` here: rule C accepted the line by equality
+  # against two literals and rule B refused everything else, so there is no
+  # third value and no exotic spelling left to guard against. That is the point
+  # of the whitelist — the previous version needed two extra branches here (a
+  # not-true-not-false check and a non-canonical-form check) precisely because
+  # its matcher accepted forms it was unwilling to rewrite.
 
   # Bounded to the frontmatter line range. Unbounded, this rewrote any code
   # block or prose line in the body that happened to match.
@@ -242,7 +274,8 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
 
   if [ "$(frontmatter_key_value "$f" "$end")" != "false" ]; then
     echo "ERROR: $f frontmatter still does not read 'disable-model-invocation: false'" >&2
-    echo "       after the rewrite. Line reads: $(frontmatter_key_lines "$f" "$end")" >&2
+    echo "       after the rewrite. Frontmatter now reads:" >&2
+    frontmatter_key_mentions "$f" "$end" | awk '{ print "         " $0 }' >&2
     failed=1
     continue
   fi
@@ -251,9 +284,8 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
   changed=$((changed + 1))
 done
 
-if [ "$checked" -eq 0 ] && [ "$failed" -eq 0 ]; then
-  echo "ERROR: found no SKILL.md carrying a disable-model-invocation key in frontmatter" >&2
-  echo "       under $SKILLS_DIR." >&2
+if [ "$discovered" -eq 0 ]; then
+  echo "ERROR: found no SKILL.md under $SKILLS_DIR." >&2
   echo "       Reporting this rather than exiting 0: a run that examined nothing must" >&2
   echo "       not read the same as a run that asserted the whole fleet." >&2
   exit 1
@@ -263,5 +295,7 @@ fi
 # Report the exempt count separately. Folding it into the total would say all N
 # skills assert `false` when one of them asserts the opposite, which is the same
 # "clean verdict covering something it did not cover" the rest of this fleet's
-# tooling exists to avoid.
-echo "OK: $((checked - exempted)) skill(s) assert disable-model-invocation: false ($changed changed), $exempted exempt and verified true, in $REPO_ROOT"
+# tooling exists to avoid. Skills with no key at all are reported separately
+# again, because "asserts false" and "relies on the default being false" are
+# different claims and only the first is something this script verified.
+echo "OK: $((explicit - exempted)) skill(s) assert disable-model-invocation: false ($changed changed), $exempted exempt and verified true, $((discovered - explicit)) rely on the default, of $discovered skill(s) in $REPO_ROOT"

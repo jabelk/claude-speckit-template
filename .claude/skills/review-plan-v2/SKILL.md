@@ -9,13 +9,16 @@ description: Pre-push gate for the current branch's diff. Runs review-plan-v2's 
 
 ```bash
 # Prerequisite: the change is COMMITTED. The first leg reads the committed diff.
-review-plan-v2 --static-only --plain --base main \
-  && coderabbit review --base main --include-untracked
+BASE=main   # or `staging` on repos with a staging branch — set it once, here
+review-plan-v2 --static-only --plain --base "$BASE" \
+  && coderabbit review --base "$BASE" --include-untracked
 # leg 1: deterministic only, nothing is billed, nothing leaves the machine
 # leg 2: sends the diff to a vendor; plain text is its default, --plain is NOT a flag
 ```
 
-Use `--base staging` on repos with a staging branch. Both share exit-code semantics: `0` clean, `1` actionable, `2` tool error. Address what either surfaces before pushing.
+**One `BASE` variable, not the branch name typed four times.** Every command in this file — both legs, and the gitleaks fallback further down — takes the same base, and until 2026-08-29 the fallback hardcoded `main` while the primary said "use `--base staging` on repos with a staging branch." On a staging repo that fallback diffs against the wrong branch and still exits 0, which is a gate reporting clean over a range it was never asked about. CodeRabbit caught it.
+
+**The exit codes are NOT shared between the two legs.** `review-plan-v2` has three tiers: `0` clean, `1` actionable, `2` tool error. `coderabbit` has one non-zero code for everything — verified on 0.7.5 on 2026-08-29: an unknown flag gives `error: unknown option` at exit **1**, running outside a git repository gives `Error: Git repository not found.` at exit **1**, and "found actionable issues" is also exit **1**. Three outcomes, one status, and two of them mean the reviewer never ran. So on the second leg, read the first line of output; the number cannot tell you which of the three happened. This skill claimed the tiers were shared by both until 2026-08-29.
 
 **The `&&` is the point, not shell tidiness.** On two separate lines a non-zero first leg does not stop the second, so a gitleaks hit is followed by the diff being sent to a vendor anyway and the scan prevented nothing. This skill said exactly that about the missing-binary fallback while leaving the primary command unchained, which is the same defect one line higher up; CodeRabbit caught it. Accept the consequence the chain brings: any actionable static finding, lint included, now blocks the vendor leg until it is fixed. That is the intended order — the local half is free and the vendor half is not, and "address what either surfaces before pushing" is not a thing a caller should have to remember to do in sequence.
 
@@ -57,7 +60,7 @@ Keep running it because it is the half CodeRabbit does not replace: a pre-push s
 - **Exit 0 also covers "reviewed ZERO files."** An empty diff, or every file excluded by `path_filters`. Those runs print `[NOTHING REVIEWED]`. Read the `reviewing N of M changed file(s)` line rather than trusting the exit code, or pass `--require-changes` to make it exit 2. The usual cause is uncommitted changes or the wrong `--base`.
 - **`path_filters` is read only from `.coderabbit.yaml`.** `.review-plan-v2.yaml` supplies `high_risk_paths`, the numeric tuning keys, `always_include_files`, and `import_aliases`, and **no path filter of any kind** — a `path_filters:` block written there is silently ignored, and an empty filter means review everything. One repo carried such a block for weeks believing it was filtered. Confirm a filter from the `reviewing N of M` line, never from a config file containing the word.
 - **`high_risk_paths` in `.review-plan-v2.yaml` now drives nothing.** It selected files for the retired cascade. If a repo has review briefs worth keeping there, they belong in `.coderabbit.yaml` as `reviews.path_instructions`.
-- **`coderabbit review --plain` is not a flag.** It exits **1** with `error: unknown option '--plain'`, and exit 1 is also "found actionable issues" — so a caller gating on the status reads a reviewer that never ran as one that flagged something. Plain text is already the default. It also reviews **tracked** changes only, so `git add` a new file or pass `--include-untracked`.
+- **`coderabbit review --plain` is not a flag.** It exits **1** with `error: unknown option '--plain'`, which is the same 1 as "found actionable issues" — see the exit-code paragraph above. Plain text is already the default. It also reviews **tracked** changes only, so `git add` a new file or pass `--include-untracked`.
 - **`--static-only --no-static-analyzers` is exit 2**, not a clean run, because together they check nothing.
 - **`coderabbit auth status`, not `which coderabbit`.** An installed-but-signed-out CLI is a binary that cannot review. `coderabbit auth login` needs a TTY that Claude Code's shell does not provide; use `coderabbit auth login --agent`, which prints an `authUrl` and waits on a `127.0.0.1` callback. That callback URL carries a live access token, so treat it as a secret: never paste it into a chat, a log, or a commit.
 
@@ -84,8 +87,8 @@ The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → th
 **If the binary is absent, do not fall through to the vendor leg alone.** That was the previous advice here and it was wrong: it sends the diff off the machine with no secret scan in front of it, which is the one sequence this skill exists to preserve. gitleaks is an independent binary and does not need `review-plan-v2`, so run it directly and then proceed:
 
 ```bash
-gitleaks git --log-opts="main..HEAD" \
-  && coderabbit review --base main --include-untracked
+gitleaks git --log-opts="$BASE..HEAD" \
+  && coderabbit review --base "$BASE" --include-untracked
 ```
 
 **Chained with `&&`, not listed on separate lines.** A leak exits non-zero, and on separate lines the next command runs anyway — sending to the vendor the exact diff the scan just objected to. Use `gitleaks dir .` in place of the `git` form when untracked files are in play; it scans the working tree. Both forms verified on gitleaks 8.30.1.
