@@ -8,11 +8,13 @@ description: Pre-push gate for the current branch's diff. Runs review-plan-v2's 
 Gate the current branch before pushing. Two commands, in this order, from the repo root:
 
 ```bash
-review-plan-v2 --static-only --plain --base main   # deterministic only; nothing is billed
-coderabbit review --base main                     # plain text is its default; --plain is NOT a flag
+review-plan-v2 --static-only --plain --base main            # deterministic only; nothing is billed
+coderabbit review --base main --include-untracked           # plain text is its default; --plain is NOT a flag
 ```
 
 Use `--base staging` on repos with a staging branch. Both share exit-code semantics: `0` clean, `1` actionable, `2` tool error. Address what either surfaces before pushing.
+
+`--include-untracked` is in the command rather than a footnote because without it `coderabbit review` reads **tracked changes only**, and a gate run before anything is staged silently skips every new file. That is the worst failure shape available here: a brand-new module is exactly the file most worth reviewing, and its omission looks identical to a clean pass. Files matched by `.gitignore` stay excluded either way. `review-plan-v2` reads the committed diff and has no equivalent flag, so its half still needs the work committed — a `reviewing 0 of 0` line usually means uncommitted changes, not a clean tree.
 
 ## What changed on 2026-08-28, and why it matters to how you read this
 

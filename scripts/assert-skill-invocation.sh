@@ -48,6 +48,7 @@ fi
 
 changed=0
 checked=0
+exempted=0
 failed=0
 
 for f in "$SKILLS_DIR"/*/SKILL.md; do
@@ -59,7 +60,24 @@ for f in "$SKILLS_DIR"/*/SKILL.md; do
     [ "$skill" = "$keep" ] && exempt=1
   done
   if [ "$exempt" -eq 1 ]; then
-    echo "  exempt: $skill (declared slash-command-only)"
+    # An exemption is a CLAIM about the file, so verify it rather than trusting
+    # the name. This branch used to `continue` immediately, which meant the one
+    # skill the exemption exists to protect was the only skill nothing checked:
+    # if ship's flag drifted to `false`, or the key were dropped, the script
+    # printed "exempt" and exited 0 while merge, push, and deploy became
+    # model-invocable. CodeRabbit caught it on the first run of this script.
+    if ! grep -q '^disable-model-invocation: true$' "$f"; then
+      echo "ERROR: $skill is listed in KEEP_DISABLED but does not set" >&2
+      echo "       'disable-model-invocation: true'. Line reads: $(grep '^disable-model-invocation:' "$f" || echo '<key absent>')" >&2
+      echo "       An exempt skill takes externally visible, hard-to-reverse actions." >&2
+      echo "       Either restore the flag, or remove $skill from KEEP_DISABLED and" >&2
+      echo "       delete the reason recorded there." >&2
+      failed=1
+      continue
+    fi
+    echo "  exempt: $skill (declared slash-command-only, flag verified)"
+    checked=$((checked + 1))
+    exempted=$((exempted + 1))
     continue
   fi
 
@@ -93,4 +111,8 @@ if [ "$checked" -eq 0 ]; then
 fi
 
 [ "$failed" -eq 0 ] || exit 1
-echo "OK: $checked skill(s) assert disable-model-invocation: false ($changed changed) in $REPO_ROOT"
+# Report the exempt count separately. Folding it into the total would say all N
+# skills assert `false` when one of them asserts the opposite, which is the same
+# "clean verdict covering something it did not cover" the rest of this fleet's
+# tooling exists to avoid.
+echo "OK: $((checked - exempted)) skill(s) assert disable-model-invocation: false ($changed changed), $exempted exempt and verified true, in $REPO_ROOT"
