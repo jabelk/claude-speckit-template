@@ -69,8 +69,14 @@ reviews:
         - Secrets or credentials
         - A local modification that will obviously break this repo's own
           scripts (setup.sh, scripts/**) or documented workflow
-        The one intentional local delta: `disable-model-invocation: true`
-        in speckit-*/SKILL.md frontmatter (re-applied by setup.sh).
+        There is no longer an intentional local delta in speckit-*/SKILL.md.
+        Until 2026-08-28 setup.sh flipped upstream's
+        `disable-model-invocation: false` to `true` on every re-vendor; it
+        now asserts upstream's `false` instead, via
+        scripts/assert-skill-invocation.sh. So a `true` in one of these
+        files IS a finding: it means the assert step was skipped or the
+        file was hand-edited. `/ship` is the one declared exception and is
+        not vendored.
 
     - path: '**/*.md'
       instructions: |

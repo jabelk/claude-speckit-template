@@ -7,6 +7,13 @@ metadata:
   author: "jabelk"
   source: "claude-code-template"
 user-invocable: true
+# The fleet default became `false` on 2026-08-28 — a skill Claude cannot reach is
+# a skill Claude will not use when it should. /ship is the one declared
+# exception, and stays slash-command-only: it merges PRs, pushes branches, and
+# runs a project's promote/deploy steps. Those are externally visible and hard to
+# reverse, which is the one category that must not fire on a model's judgement
+# that the moment looked right. Enforced by scripts/assert-skill-invocation.sh
+# (KEEP_DISABLED), which carries the same reason.
 disable-model-invocation: true
 ---
 
