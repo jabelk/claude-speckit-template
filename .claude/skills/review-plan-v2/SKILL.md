@@ -1,86 +1,213 @@
 ---
 name: review-plan-v2
-description: Local pre-push code review across parallel specialized reviewers (security, correctness, tests, consistency) plus static analyzers — drop-in replacement for `coderabbit review --plain` without vendor rate limits. Uses your own LLM API keys (DeepSeek broad-pass + OpenAI/Gemini cascade on high-risk paths).
+description: Pre-push gate for the current branch's diff. Runs review-plan-v2's deterministic analyzers (gitleaks, markdownlint, actionlint, shellcheck, ruff, structural) with --static-only, then the CodeRabbit CLI for the actual review. No API keys, nothing billed to you, and no diff leaves the machine on the first leg. The tool's own AI reviewer legs were retired on 2026-08-28 — never run it without --static-only.
 ---
 
 # /review-plan-v2
 
-Run a parallel multi-agent review of the current branch's diff vs the base branch.
+**Commit the change first.** Then run this, from the repo root. It is the whole gate,
+and it is one block on purpose — see "One vendor path" below:
 
-## When to invoke
+Paste these two definitions once per shell. **Every command block in this file
+assumes them**, and each one begins with `preflight &&` — that is the only form in
+which a vendor call appears here.
 
-- Pre-push: same point in the workflow where the global CLAUDE.md says to run `coderabbit review --plain --base main`. This skill is a drop-in.
-- Specifically when:
-  - You want findings without burning a CodeRabbit Pro rate-limit slot.
-  - You want to gate the push on a clean `actionable` count (`exit 1` on actionable findings).
-  - You want JSON output for downstream tooling (`--agent`).
+```bash
+# Prerequisite: the change is COMMITTED. Leg 1 reads the committed diff.
+BASE=main   # or `staging` on repos with a staging branch — set it once, here
 
-## Outline
+# The guard, defined ONCE. The body is `( ... )` — a subshell — so `exit 2` ends the
+# guard and returns 2 to the caller instead of killing an interactive shell.
+preflight() (
+  # Fail CLOSED: a worktree that cannot be inspected is not a clean one.
+  if ! worktree=$(git status --porcelain --untracked-files=all); then
+    echo "STOP: cannot inspect the worktree, so the vendor leg is not safe." >&2
+    exit 2
+  fi
+  # NOT a pipeline, deliberately — see "the guard fell open under pipefail" below.
+  if untracked=$(grep '^??' <<<"$worktree"); then
+    printf '%s\n' "$untracked"
+    echo "STOP: the vendor leg would send the untracked files listed above." >&2
+    exit 2
+  fi
+)
+```
 
-1. From repo root, run:
+Then the gate itself:
 
-   ```bash
-   review-plan-v2 --plain --base main
-   ```
+```bash
+preflight \
+  && review-plan-v2 --static-only --plain --base "$BASE" \
+  && preflight \
+  && coderabbit review --base "$BASE" --include-untracked
+# leg 1: deterministic only, nothing is billed, nothing leaves the machine
+# leg 2: sends the diff to a vendor; plain text is its default, --plain is NOT a flag
+# preflight twice on purpose: once to fail fast, once immediately before the send
+```
 
-   The `review-plan-v2` binary is installed globally as a symlink at `~/.local/bin/review-plan-v2` → `~/dev/projects/claude-workflows/scripts/review-plan-v2.sh`. If the binary is missing on this machine, fall back to `coderabbit review --plain --base main` (CR CLI is a drop-in alternative with the same flag shape).
+**A named guard, because annotating the other blocks did not guard them.** Until
+2026-08-29 this file opened with the two legs alone and put the untracked-file
+check in a second block further down, next to the prose explaining it. A reader
+who copied the first block — the obvious thing to copy, being first and
+complete-looking — got the vendor leg with no guard at all, and the `gitleaks`
+fallback near the bottom had the same hole. The first fix was to keep one guarded
+block and mark the other two sites with comments saying the preflight above still
+applied. CodeRabbit rejected that on the next round and was right to: a comment
+telling a reader what they should have run is not a guard on what they did run,
+and both of those blocks were still copyable, complete, and unguarded. Hence a
+function. The check now exists in exactly one place *and* appears at every vendor
+site, which is what the previous two attempts each got half of.
 
-2. Read the output:
-   - `[INCOMPLETE]` at the **top** means some reviewer tasks never ran — the review is PARTIAL and a "clean" result proves nothing. Treat it as a failed gate, not a pass. See below.
-   - `[ACTIONABLE]` lines block the push — fix them, re-run.
-   - `[NIT]` / `[INFO]` are informational — your call.
-   - Footer summary states counts + any analyzer skips + any config warnings.
+**The `( ... )` body is the fix for a second thing I had merely apologised for.**
+The guard used to be a bare `if` with `exit 2`, which does the right thing in a
+script and terminates the *user's shell* when pasted into an interactive one —
+this file's answer to that was a note saying "interactively, read the STOP line",
+which is documentation standing in for a defect. A subshell function body makes
+`exit 2` mean "the guard failed", interactively and in a script alike. CodeRabbit
+caught it.
 
-   Exit codes: `0` clean **and** fully covered · `1` actionable findings · `2` tool error **or incomplete coverage** · `3` cost cap · `5` strict-config.
+**The guard fell open under `pipefail`, and this file is what turned it on.** The
+check used to be `printf '%s\n' "$worktree" | grep -q '^??'`. `grep -q` exits the
+moment it matches, so on a long list `printf` is still writing when the read end
+closes and takes `SIGPIPE`, exiting 141. With `set -o pipefail` the pipeline
+reports 141 rather than `grep`'s 0, the `if` sees non-zero, and the *proceed*
+branch runs — the guard concludes the worktree is clean because it found too many
+untracked files to finish saying so. Measured on 2026-08-29, `pipefail` set: at 3
+untracked files the guard triggered correctly; at 20,000 it printed
+`status=141` and fell open. Not hypothetical here, either — the structured-output
+block below tells you to `set -o pipefail`, and this file says every block assumes
+the definitions pasted once per shell, so following it in order arms the failure.
+The form above has no pipeline at all: one `grep` reading a here-string, whose
+status is its own, and the captured list is what gets printed. CodeRabbit caught
+it. That is the third time the same guard has been wrong in the direction of
+sending the diff, and all three had the same shape — a status that was not the
+status the guard thought it was reading.
 
-   Never read `exit 0` as "reviewed and clean" without checking for `[INCOMPLETE]` — that distinction is the whole point of code 2.
+**`preflight` runs twice, because the first call answers about a worktree the send
+does not use.** Between the guard and the vendor leg sits the entire runtime of
+the static leg, which is where an editor autosave, a build artifact, or another
+agent session working in the same tree lands a new untracked file. `--include-untracked`
+then sends a file that no gitleaks run ever saw, which is the exact hole the guard
+exists to close, arrived at through the check rather than around it. The second
+call costs one `git status` and closes the window to the width of a process spawn.
+CodeRabbit caught this, and the reason it is worth taking seriously rather than
+filing as paranoia is that a second session writing into a shared worktree is the
+normal case on this machine, not a contrived one.
 
-3. If the run reports `[INCOMPLETE]`:
+**Fail closed, because the guard's clean answer and its broken answer looked the
+same.** The earlier form was `if git status --porcelain -uall | grep '^??'`. When
+`git status` itself fails, `grep` reads empty input and exits 1, so the `else`
+branch runs and the vendor leg proceeds — the guard reports a clean worktree
+precisely when it could not see the worktree. Verified on 2026-08-29 by running
+the old form in a non-repository directory: it printed `fatal: not a git
+repository` and then took the proceed branch. The form above captures the status
+separately and treats a failed capture as its own `exit 2`. CodeRabbit caught this
+one round after catching the missing `if`, which is the same lesson twice: a check
+whose failure mode is indistinguishable from success is not a check.
 
-   The reviewer phase has a wall-clock budget that scales with queued work (`ceil(tasks / concurrency) × 45s`, floored at 180s, capped at 1800s). Tasks are submitted in reviewer order, so when the budget runs out the *later* reviewers starve first — you lose `consistency`, then `tests`, then `correctness`, while `security` still completes. That skew is why a partial run can look plausible.
+**One `BASE` variable, not the branch name typed four times.** Every command in this file — both legs, and the gitleaks fallback further down — takes the same base, and until 2026-08-29 the fallback hardcoded `main` while the primary said "use `--base staging` on repos with a staging branch." On a staging repo that fallback diffs against the wrong branch and still exits 0, which is a gate reporting clean over a range it was never asked about. CodeRabbit caught it.
 
-   Options, cheapest first:
-   - Re-run — provider latency varies and a marginal run often clears.
-   - Raise `--max-concurrency` (fewer waves → less wall clock).
-   - Narrow the diff (review in two passes).
+**The exit codes are NOT shared between the two legs.** `review-plan-v2` has three tiers: `0` clean, `1` actionable, `2` tool error. `coderabbit` has one non-zero code for everything — verified on 0.7.5 on 2026-08-29: an unknown flag gives `error: unknown option` at exit **1**, running outside a git repository gives `Error: Git repository not found.` at exit **1**, and "found actionable issues" is also exit **1**. Three outcomes, one status, and two of them mean the reviewer never ran. So on the second leg, read the first line of output; the number cannot tell you which of the three happened. This skill claimed the tiers were shared by both until 2026-08-29.
 
-   **Background:** this was a live incident on 2026-08-01 — 34 of 48 tasks were silently cancelled and the run still printed `No findings.` and exited 0. When the same diff was re-run after the fix, it surfaced **9 actionable findings**. If you see `[INCOMPLETE]`, assume findings are missing.
+**The `&&` is the point, not shell tidiness.** On two separate lines a non-zero first leg does not stop the second, so a gitleaks hit is followed by the diff being sent to a vendor anyway and the scan prevented nothing. This skill said exactly that about the missing-binary fallback while leaving the primary command unchained, which is the same defect one line higher up; CodeRabbit caught it. Accept the consequence the chain brings: any actionable static finding, lint included, now blocks the vendor leg until it is fixed. That is the intended order — the local half is free and the vendor half is not, and "address what either surfaces before pushing" is not a thing a caller should have to remember to do in sequence.
 
-4. If you need structured output:
+**The commit prerequisite is load-bearing, not tidiness.** Run the command above on uncommitted work and it prints `reviewing 0 of 0` and exits **0** — a clean-looking gate that ran no secret scan and no lint over the change. So if the `reviewing N of M changed file(s)` line reads zero while you have work in progress, that is the diagnosis; commit and re-run rather than reading it as a pass.
 
-   ```bash
-   review-plan-v2 --agent --base main | jq 'select(.type == "finding")'
-   ```
+**This skill claimed `review-plan-v2` "has no working-tree mode" until 2026-08-29, and that was simply false.** `--type` takes `all`, `committed`, or `uncommitted`, and `uncommitted` is a working-tree mode. The correction matters less for what it adds than for what it does not: the mode exists, and it still does not cover the case the guard above exists for. Measured on 2026-08-29 in a scratch repo holding one unstaged modification, one staged addition, and one untracked file:
 
-## When v2 keeps re-flagging an issue you already mitigated
+| `--type` | what it diffs | reviewed, in that scratch repo |
+|---|---|---|
+| `all` (**the default**) | `$BASE...HEAD` | nothing — `[NOTHING REVIEWED]`, exit 0 |
+| `committed` | `$BASE...HEAD`, identical to `all` | nothing |
+| `uncommitted` | plain `git diff` | the unstaged file only |
 
-v2's reviewers see one file's diff hunk in isolation. When your mitigation lives in **another file** (a validator helper, a Pydantic model with `pattern=`, an auth dependency, an allowlist regex), the reviewer can't see it and will re-flag the same finding round after round. **Don't argue with the reviewer in commit messages** — that costs cycles and never converges. Instead, do one or more of the following at the **call site** that's actually in the diff:
+Two things follow. `all` is a misnomer — it is the committed diff, so the default flag set never reads the working tree, which is why the commit prerequisite stands. And `uncommitted` maps to plain `git diff`, which excludes the index, so the staged-but-uncommitted file was reviewed by **no scope at all** and neither was the untracked one. There is no `--type` that puts an untracked file in front of gitleaks; `gitleaks dir .` is the tool for that. CodeRabbit caught the false claim, and the staged-file gap turned up while checking it.
 
-1. **Belt-and-suspenders the validator at the call site**. If the chokepoint is `_is_safe_href()` in `helpers.py`, add a Jinja `|safe_url` filter / wrapper that calls it again at the template / render boundary. The validation is now visible *in the hunk being reviewed*. You also get genuine defense-in-depth for free.
-2. **Add a `## Security model` (or `## Validation invariants`) section to the contract / data-model doc**. Enumerate the chokepoints, the file:function locations, and the regression tests that exercise them. Title it explicitly so automated reviewers will read it (`"Security model (load-bearing — automated reviewers please read first)"` works). Future review rounds will quote that section instead of re-deriving the concern.
-3. **Trivial inline sanity check at the call site**, when the real validation upstream is non-obvious to a reviewer reading just the hunk. Strategies 1 and 2 are the preferred routes for real validation — strategy 3 is **only** for cheap, obviously-safe heuristics: substring or prefix checks (`'..' in ref`, `ref.startswith('/')`), null/empty guards, length caps. **Do not** duplicate complex regexes, multi-condition Pydantic patterns, or hard-coded constants — that's anti-DRY bloat that drifts from the source of truth. The point of the inline guard is documentation-as-code: it tells the reviewer "yes, we know about this class of input; the real validator lives at <file>:<func> per the security-model section."
+**The order is also load-bearing.** gitleaks runs in the first leg and nothing leaves the machine there. The second leg sends the diff to a vendor. Running the secret scan after the egress inverts the only sequence in which it can prevent anything.
 
-These are not workarounds — they are the **correct response** to a per-file-isolated reviewer flagging a cross-file mitigation. The reviewer is doing its job; your job is to surface the chokepoint at the use site.
+**`--include-untracked` is a detector, not coverage, and it opens the hole the ordering above closes.** Without it `coderabbit review` reads **tracked changes only**, so a file you forgot to `git add` is invisible to the review and its omission looks identical to a clean pass. With it, that file is sent to the vendor — and no `--type` scope puts an untracked file in front of gitleaks, so gitleaks never scanned it. The flag therefore routes exactly the least-reviewed file in the change around the secret scan.
 
-When NOT to do this: if the same finding is recurring round-over-round and **the actual code didn't change**, it's a v2 visibility limit, not a real bug. Don't bloat the codebase with redundant guards. Document the false-positive class in the spec doc, then merge.
+So the untracked check happens **before** either leg, from git, not from CodeRabbit's file count — by the time the second leg reports an extra file it has already sent it. That is `preflight`, defined at the top of this file, and every command block here leads with it.
 
-Open enhancements tracking these limits: GH issues #18 (`always_include_files`), #19 (`--include-related-files` 1-hop importers), #20 (round-N memory to suppress repeat findings). When any of those land, this section gets shorter.
+**The check is wrapped in an `if` rather than left as a bare pipeline because its clean result is a non-zero exit.** `grep '^??'` finding nothing exits **1**, so the outcome you want is the one that looks like failure: as a bare line above the gate under `set -e` the clean case aborts before either leg runs, and without `set -e` it is a line whose output nobody is obliged to read. Wrapping it makes the ordering structural instead of a thing the reader has to remember to honour. This is also why the two `if`s are separate rather than an `if`/`elif`: the first tests whether the worktree could be *read*, the second what it *contains*, and collapsing them invites the fail-open form below.
 
-## Coexistence with /review-plan v1
+Between them these paragraphs record six consecutive rounds on one guard: CodeRabbit caught the missing `if`, then the fail-open pipeline capture, then the two unguarded copyable blocks, then the interactive-shell-killing `exit`, then the `SIGPIPE` fail-open under `pipefail`, then the window between the check and the send. Six rounds on nine lines of shell stopped being an argument for making the guard a function some rounds ago; it is an argument for the guard not living in prose at all. A shell fragment in a Markdown file has no mechanism to be wrong out loud — nothing executes it, nothing tests it, and every reader is free to paste half of it. Each of those six fixes was correct and each one left the next hole, which is what iterating on documentation instead of on code buys. The version of this that stops the sequence is a committed script with the guard as its first function and a test that feeds it a dirty worktree, invoked as one command from here.
 
-`/review-plan` (v1) reviews **specs/plans pre-implementation** via OpenAI + Gemini. `/review-plan-v2` reviews **diffs pre-push** via a DeepSeek broad-pass + an optional OpenAI/Gemini cascade on high-risk paths. They share no code; they serve different points in the workflow. Both stay installed.
+**The bar is no untracked files at all, not "none belonging to this change."** `--include-untracked` sends every non-ignored untracked file in the worktree, so scratch notes, a pasted credential, a downloaded export, or a colleague's data sample sitting in the tree unrelated to the branch all go to the vendor with it. Deciding which ones "belong to the change" is a judgement made after the send. If a file should be reviewed, commit it and re-run the static leg; if it should not leave the machine, `.gitignore` it or move it out of the tree; if it is genuinely scratch, that is what `.gitignore` is for.
+
+Keep `--include-untracked` anyway, as the backstop that should then find nothing: if it reports files the `reviewing N of M` line did not, that is a scan you skipped, not a bonus. Files matched by `.gitignore` stay excluded either way. If you need a secret scan over the working tree including untracked files, gitleaks does it directly and locally: `gitleaks dir .` (verified on 8.30.1).
+
+## What changed on 2026-08-28, and why it matters to how you read this
+
+**This skill used to describe a multi-reviewer AI pass over the diff using your own API keys. That is gone.** Whatever earlier versions said about DeepSeek, a Gemini broad pass, a `gpt-5.5` cascade on high-risk paths, `[DEAD-LEG]` provider refusals, `[STARVED]` reviewers, or an `[INCOMPLETE]` wall-clock budget described components that no longer run. Two reasons, and the second is why this was not merely a cost trim.
+
+- **Billed separately for weaker findings.** Those reviewers saw one file's diff hunk at a time — not the PR history, not earlier review rounds, not cross-document context. In practice they surfaced a subset of what the PR-side review found anyway. Same finding, two vendor bills, weaker one first.
+- **They were the machine's memory ceiling.** A full run held per-file reviewer output for every changed file in a long-lived Python process at foreground priority, with **no cross-process concurrency guard** — nothing refused a second or third concurrent run. Three overlapping runs across two repos, one with a 177-file diff, saturated the compressor at 13.4 GB of 24 GB physical; Jetsam killed only low-priority daemons because the consumer outranked all of them, and the machine kernel-panicked on a watchdog timeout twice. NOT VERIFIED as the sole cause — re-running under measurement would bill real API keys — but the full test suite (peak 2.6 GB) and the mutation harness (peak 3.4 GB) were measured in the same repos and ruled out.
+
+Consequence to accept rather than work around: PR-side review rounds may run longer than the one or two the two-reviewer setup targeted. One reviewer with full context beats two where the cheaper one is blind, and a review tool that can panic the machine it runs on is not a gate.
+
+## What `--static-only` actually checks
+
+gitleaks (sequential, first), markdownlint, actionlint, shellcheck, ruff, and the structural enumerator. Then it renders their findings and exits. No reviewer is constructed, no provider is called, no diff leaves the machine, no key is billed. It also does not take the auto-pause state lock, because a static run is not a review round.
+
+Keep running it because it is the half CodeRabbit does not replace: a pre-push secret scan, and lint gates that read this repo's own `.markdownlint.json` and gate config. Free, fast, bounded in memory.
+
+**A clean static run and a clean full review print the same `No findings` body.** The difference is the entire question of what was checked, so the run prints a `STATIC ONLY` banner on stderr saying so. If you are reporting a gate as clean, say which gate.
+
+## Traps that have each cost real time
+
+- **Exit 0 also covers "reviewed ZERO files."** An empty diff, or every file excluded by `path_filters`. Those runs print `[NOTHING REVIEWED]`. Read the `reviewing N of M changed file(s)` line rather than trusting the exit code, or pass `--require-changes` to make it exit 2. The usual cause is uncommitted changes or the wrong `--base`.
+- **`path_filters` is read only from `.coderabbit.yaml`.** `.review-plan-v2.yaml` supplies `high_risk_paths`, the numeric tuning keys, `always_include_files`, and `import_aliases`, and **no path filter of any kind** — a `path_filters:` block written there is silently ignored, and an empty filter means review everything. One repo carried such a block for weeks believing it was filtered. Confirm a filter from the `reviewing N of M` line, never from a config file containing the word.
+- **`high_risk_paths` in `.review-plan-v2.yaml` now drives nothing.** It selected files for the retired cascade. If a repo has review briefs worth keeping there, they belong in `.coderabbit.yaml` as `reviews.path_instructions`.
+- **`coderabbit review --plain` is not a flag.** It exits **1** with `error: unknown option '--plain'`, which is the same 1 as "found actionable issues" — see the exit-code paragraph above. Plain text is already the default. It also reviews **tracked** changes only, so `git add` a new file or pass `--include-untracked`.
+- **`--static-only --no-static-analyzers` is exit 2**, not a clean run, because together they check nothing.
+- **`coderabbit auth status`, not `which coderabbit`.** An installed-but-signed-out CLI is a binary that cannot review. `coderabbit auth login` needs a TTY that Claude Code's shell does not provide; use `coderabbit auth login --agent`, which prints an `authUrl` and waits on a `127.0.0.1` callback. That callback URL carries a live access token, so treat it as a secret: never paste it into a chat, a log, or a commit.
+
+## Structured output
+
+```bash
+set -o pipefail   # or check ${PIPESTATUS[0]} / ${pipestatus[1]} in zsh
+preflight \
+  && review-plan-v2 --static-only --agent --base "$BASE" | jq 'select(.type == "finding" or .type == "summary")' \
+  && preflight \
+  && coderabbit review --agent --base "$BASE" --include-untracked
+```
+
+**`set -o pipefail` is part of the example, not decoration.** Without it the pipeline reports `jq`'s status, so an analyzer exiting 1 or 2 reads as 0 — a gate that found something, or failed to run at all, reported as clean by the one number a caller checks.
+
+**And the two mechanisms are one mechanism here.** Until 2026-08-29 this block listed the legs on separate lines, so a gitleaks hit in the first was followed by the diff going to the vendor anyway — the identical defect the `&&` paragraph above spends a paragraph on, sitting in this file's own example, which is a fair measure of how well prose protects an invariant. Chained now. Note that the `&&` and the `pipefail` depend on each other in a way the plain-text form does not: `&&` reads the *pipeline's* status, and without `pipefail` that status is `jq`'s, which is 0 whether the analyzers found a credential or never ran. Dropping `set -o pipefail` from this block therefore leaves a chain that looks like a gate and gates nothing. CodeRabbit caught the missing `&&`.
+
+**The filter keeps the summary record, because the paragraph below is about a record the example used to discard.** It read `select(.type == "finding")` until 2026-08-29, which drops the only record that says which gate ran — so the next sentence advertised a capability the command above it destroyed, in the same file, five lines apart. The `--agent` summary record reports `static_only`, so a consumer can tell an exit 1 from the deterministic half apart from an exit 1 from a full review; verified on 2026-08-29 the stream carries exactly one non-finding record, `{"type":"summary","static_only":true,...}`. CodeRabbit caught it.
 
 ## Required env
 
-- `DEEPSEEK_API_KEY` — required. Drives all four broad-pass reviewers (`deepseek-v4-pro`).
-- `OPENAI_API_KEY` — optional, adds a `gpt-5.5` cascade pass on high-risk paths configured in `.review-plan-v2.yaml`.
-- `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) — optional, adds a `gemini-3.1-pro-preview` cascade pass on the same paths.
+**None.** No provider key is needed in static-only mode; a run with every key unset behaves identically. `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY` all enable nothing here now.
 
-`ANTHROPIC_API_KEY` is **not** used. The cascade deliberately dropped Anthropic: a Claude judge reviewing Claude-written code is self-grading. Each cascade provider is gated on its key being present, so a missing key silently drops that leg rather than failing the run — check the `providers_called` summary field if you expect a cascade and don't see one.
+System deps: `brew install python@3.12 jq yq gitleaks markdownlint-cli actionlint shellcheck`. CR CLI: `brew install --cask coderabbit` then `coderabbit auth login --agent`. The docs write it as `brew install coderabbit`, which works only because no formula of that name exists and `brew install` falls back to searching casks — observed on 2026-08-28, where the bare form printed `Would install 1 cask: coderabbit` and installed 0.7.5. Prefer the explicit `--cask` anyway, so the command does not depend on a formula of that name never appearing.
 
-See `specs/001-review-plan-v2/quickstart.md` for full install + configuration docs.
+The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → the workflows repo's `scripts/review-plan-v2.sh`. The target is machine-specific; check it with `ls -l ~/.local/bin/review-plan-v2`.
+
+**If the binary is absent, do not fall through to the vendor leg alone.** That was the previous advice here and it was wrong: it sends the diff off the machine with no secret scan in front of it, which is the one sequence this skill exists to preserve. gitleaks is an independent binary and does not need `review-plan-v2`, so it can stand in for leg 1:
+
+```bash
+# gitleaks substitutes for leg 1 ONLY. `preflight` is still the first thing that runs,
+# and runs again immediately before the send.
+preflight \
+  && gitleaks git --log-opts="$BASE..HEAD" \
+  && preflight \
+  && coderabbit review --base "$BASE" --include-untracked
+```
+
+**Chained with `&&`, not listed on separate lines.** A leak exits non-zero, and on separate lines the next command runs anyway — sending to the vendor the exact diff the scan just objected to. Use `gitleaks dir .` in place of the `git` form when untracked files are in play; it scans the working tree, which the `git` form does not. Both forms verified on gitleaks 8.30.1.
+
+If gitleaks is not installed either, stop and say the gate cannot run. The remaining lint analyzers are worth having but they are not what stands between a credential and a third party.
+
+## Coexistence with /review-plan v1
+
+`/review-plan` (v1) reviews **specs and plans pre-implementation** via OpenAI plus Gemini, and is unaffected by any of this — it still uses your own keys. This skill gates **diffs pre-push**. Different points in the workflow, no shared code, both stay installed.
 
 ## Out of scope
 
-- This skill does NOT post to GitHub PRs (use the CodeRabbit PR-side bot for that — it's the safety net for what the local pass missed).
-- This skill does NOT review specs/plans (use `/review-plan` v1 for that).
+- Does not post to GitHub PRs. The PR-side CodeRabbit review is a second look by the same reviewer with more context (cross-document consistency, spec-versus-code drift, the full PR diff), so it is not a formality — but it is a separate step, and a local pass is not a substitute for waiting on it.
+- Does not review specs or plans. Use `/review-plan` v1.
+- Does not judge correctness, security, or test coverage on its own. The static half cannot, and saying otherwise from a clean `--static-only` run is the specific mistake the `STATIC ONLY` banner exists to prevent.

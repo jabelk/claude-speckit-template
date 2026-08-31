@@ -69,8 +69,37 @@ reviews:
         - Secrets or credentials
         - A local modification that will obviously break this repo's own
           scripts (setup.sh, scripts/**) or documented workflow
-        The one intentional local delta: `disable-model-invocation: true`
-        in speckit-*/SKILL.md frontmatter (re-applied by setup.sh).
+        There is no longer an intentional local delta in speckit-*/SKILL.md.
+        Until 2026-08-28 setup.sh flipped upstream's
+        `disable-model-invocation: false` to `true` on every re-vendor; it
+        now asserts upstream's `false` instead, via
+        scripts/assert-skill-invocation.sh. So a `true` in one of these
+        files IS a finding: it means the assert step was skipped or the
+        file was hand-edited. `/ship` is the one declared exception and is
+        not vendored.
+
+    - path: 'scripts/assert-skill-invocation.sh'
+      instructions: |
+        This script deliberately REWRITES `disable-model-invocation: true`
+        to `false` in skill frontmatter rather than only validating it, and
+        the rewrite is the feature. Do NOT propose replacing it with a
+        validate-and-fail check; that has been proposed twice and declined,
+        with the reason recorded in the script's own header. Failing would
+        hand back the chore this replaced (11 files reverted by hand per
+        project, once per re-vendor), and a gate whose remedy is "go edit 11
+        files" gets skipped.
+
+        DO flag, because these are the ways it can silently do nothing or
+        the wrong thing:
+        - A check that a value in the file BODY could satisfy instead of the
+          YAML frontmatter, or a rewrite not bounded to the frontmatter line
+          range. This fleet's docs write the key inside fenced code blocks,
+          so body matches are prose, not configuration. Both bugs were real
+          here and were fixed on 2026-08-28.
+        - A path where the script exits 0 having examined nothing, or
+          reports a count that includes a skill asserting the opposite value.
+        - A KEEP_DISABLED exemption accepted on the strength of the
+          directory name without verifying the flag.
 
     - path: '**/*.md'
       instructions: |

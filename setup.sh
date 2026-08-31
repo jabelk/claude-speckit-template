@@ -121,26 +121,33 @@ if [ "$restore_failed" -ne 0 ]; then
 fi
 rm -rf "$BACKUP_DIR"
 
-# Re-apply fleet drift: upstream ships `disable-model-invocation: false`, but
-# every workflow-shaped skill in this fleet is an explicit slash command only —
-# auto-firing /speckit-specify mid-conversation is a real failure mode. specify
-# init resets the flag on every re-vendor, so it is re-applied here rather than
-# trusted to memory.
-echo "Re-applying disable-model-invocation: true to speckit skills..."
-command -v perl >/dev/null || { echo "ERROR: perl required for drift re-apply" >&2; exit 1; }
-drift_failed=0
-for f in "$REPO_ROOT"/.claude/skills/speckit-*/SKILL.md; do
-  [ -f "$f" ] || continue
-  perl -pi -e 's/^disable-model-invocation: false$/disable-model-invocation: true/' "$f"
-  # Fail LOUDLY if the end state is wrong (key renamed upstream, format drift):
-  # a re-apply that silently does nothing re-enables auto-firing skills, which
-  # is the exact failure this step exists to prevent.
-  if ! grep -q '^disable-model-invocation: true$' "$f"; then
-    echo "ERROR: $f lacks 'disable-model-invocation: true' after re-apply — upstream format changed; fix before shipping" >&2
-    drift_failed=1
-  fi
-done
-[ "$drift_failed" -eq 0 ] || exit 1
+# Keep upstream's `disable-model-invocation: false`, and assert it.
+#
+# This block did the OPPOSITE until 2026-08-28: it flipped upstream's `false` to
+# `true` on every re-vendor, on the theory that a workflow-shaped skill should
+# be an explicit slash command only and that auto-firing /speckit-specify
+# mid-conversation is a real failure mode. The theory did not survive contact
+# with the fleet. Every project spun up from this template arrived with all
+# eleven skills unavailable to the model, and the operator flipped them back to
+# `false` by hand in each one — one downstream project has all eleven flipped,
+# another has ten of eleven. A default that is manually reverted
+# in every instance is not a safety property, it is a chore, and the one file
+# missed in the reverting is how the fleet drifts.
+#
+# The auto-fire concern was also aimed at the wrong lever. A skill Claude cannot
+# reach is a skill Claude will not use when it should — /review-plan-v2 is
+# exactly the one a pre-push moment ought to reach for without being summoned.
+# The concern is real for a narrow class, and the fix is per-skill: /ship stays
+# slash-command-only because it merges PRs, pushes branches, and runs
+# promote/deploy steps, and that reason is recorded in KEEP_DISABLED in the
+# assert script AND in ship/SKILL.md's own frontmatter. One exception with a
+# stated reason, not a blanket rule with none.
+#
+# The verification half is kept and inverted, because it is the useful half: a
+# no-op re-apply must fail loudly rather than silently leave the fleet in the
+# state this change exists to end.
+echo "Asserting disable-model-invocation: false on project skills..."
+"$REPO_ROOT/scripts/assert-skill-invocation.sh" "$REPO_ROOT" || exit 1
 
 # Install Anthropic's official Office skills (docx, pptx, xlsx) for generating
 # Word / PowerPoint / Excel artifacts (status reports, decks for mgmt, etc.)
