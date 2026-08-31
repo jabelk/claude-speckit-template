@@ -17,6 +17,12 @@
 # form does not fall open, which means the test tells you when it has stopped
 # testing anything instead of going quietly green.
 #
+# Seen red, 2026-08-31: against a staged copy of the guard carrying the retired
+# two-outcome `if untracked=$(grep ...)` form, the grep-fail-closed case failed
+# with `exit 0, wanted 2` and the output line `preflight: 0 untracked files in
+# .../grepfail at this moment — the only thing checked` — the clean-tree pass,
+# printed by a run whose `grep` never searched. 13 passed, 1 failed, exit 1.
+#
 # Usage:  scripts/test-preflight-vendor-review.sh
 #         BULK=1000 scripts/test-preflight-vendor-review.sh   # expected to FAIL
 # Exit:   0 every case passed
@@ -162,6 +168,62 @@ f_missing_dir() {
   :
 }
 case_run "a path that does not exist fails CLOSED" 2 "cannot enter" f_missing_dir
+
+# ---------------------------------------------------------------------------
+# A `grep` that cannot run, with the assertion that makes it non-vacuous.
+#
+# The fixture worktree is CLEAN, so exit 2 here can only come from the check on
+# grep's status — which is what makes the case unambiguous. `grep` has three
+# outcomes and `if` has two, so the retired `if untracked=$(grep ...)` form reads
+# an operational error as "matched nothing" and reports the clean-tree pass.
+# ---------------------------------------------------------------------------
+
+STUB_DIR="$TMP/grepfail"
+new_repo "$STUB_DIR"
+mkdir -p "$TMP/stubbin"
+printf '#!/bin/sh\nexit 2\n' > "$TMP/stubbin/grep"
+chmod +x "$TMP/stubbin/grep"
+
+stub_out=""
+stub_status=0
+if stub_out="$(PATH="$TMP/stubbin:$PATH" bash "$UNDER_TEST" "$STUB_DIR" 2>&1)"; then
+  stub_status=0
+else
+  stub_status=$?
+fi
+
+if [ "$stub_status" -eq 2 ] && [ "${stub_out#*"grep exited 2"}" != "$stub_out" ]; then
+  passed=$((passed + 1)); echo "  ok    a grep that cannot run fails CLOSED (exit 2)"
+else
+  failed=$((failed + 1))
+  echo "  FAIL  a broken grep did not fail closed: exit $stub_status, wanted 2 with 'grep exited 2'"
+  awk '{ print "          | " $0 }' <<<"$stub_out"
+fi
+
+# Anti-vacuity, same shape as the bulk case below: reproduce the retired form
+# against this same stub and require it to fall open.
+retired_grep_status=0
+(
+  export PATH="$TMP/stubbin:$PATH"
+  cd "$STUB_DIR" || exit 9
+  worktree=$(git status --porcelain --untracked-files=all)
+  # The retired two-outcome form, verbatim in shape.
+  if untracked=$(grep '^??' <<<"$worktree"); then
+    : "$untracked"
+    exit 2
+  fi
+  exit 0
+) && retired_grep_status=0 || retired_grep_status=$?
+
+if [ "$retired_grep_status" -eq 0 ]; then
+  passed=$((passed + 1))
+  echo "  ok    fixture discriminates: the retired if-condition form read the broken grep as clean"
+else
+  failed=$((failed + 1))
+  echo "  FAIL  fixture is VACUOUS — the retired if-condition form also refused"
+  echo "        (status $retired_grep_status), so the case above would pass against the very"
+  echo "        implementation it exists to reject. Check the grep stub is on PATH."
+fi
 
 # ---------------------------------------------------------------------------
 # The SIGPIPE round, with the assertion that makes it non-vacuous.

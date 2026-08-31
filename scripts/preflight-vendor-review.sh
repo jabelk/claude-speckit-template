@@ -88,8 +88,29 @@ fi
 
 # NOT a pipeline — see round 5. One `grep` over a here-string, whose exit status
 # is its own and whose captured output is what gets printed.
-if untracked=$(grep '^??' <<<"$worktree"); then
-  count=$(grep -c '^??' <<<"$worktree" || true)
+#
+# And NOT `if untracked=$(grep ...)`, because `grep` has THREE outcomes and an
+# `if` has two: 0 matched, 1 matched nothing, and anything above 1 an operational
+# error. The `if` form folds that third case into its else branch, so a `grep`
+# that never searched reads exactly like a clean worktree and the script exits 0.
+# Same fail-open shape as rounds 2 and 5, in the one line that had survived both.
+# Measured 2026-08-31 with a `grep` stub exiting 2 ahead of the real one on PATH:
+# the `if` form printed "0 untracked files ... the only thing checked" at exit 0.
+# CodeRabbit caught it on the round that created this file.
+untracked=$(grep '^??' <<<"$worktree")
+grep_status=$?
+if [ "$grep_status" -gt 1 ]; then
+  echo "STOP: grep exited $grep_status, so the worktree was never searched for" >&2
+  echo "      untracked files. A check that could not run is not a clean tree." >&2
+  exit 2
+fi
+
+if [ "$grep_status" -eq 0 ]; then
+  # awk counts the lines grep actually returned. This was `grep -c '^??' ...
+  # || true`, a second call with the same three outcomes, where the `|| true`
+  # masked the operational error and left `count` EMPTY — so the refusal read
+  # `STOP:  untracked file(s) above`, blank where the number goes.
+  count=$(awk 'END { print NR }' <<<"$untracked")
   # The listing is capped and says so. A cap that stays quiet reads as "these are
   # all of them", which is the same class of lie as the rest of this file.
   awk -v cap="$LIST_CAP" -v total="$count" '

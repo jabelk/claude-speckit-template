@@ -33,7 +33,12 @@ See `.env.example` for required environment variables (if applicable).
   - Format: `<short-description>` (e.g., `add-episode-parser`, `fix-url-handling`)
 - When work is complete, create a pull request against `main` with a summary of what was done.
 - Merge the PR (squash or merge commit, no rebase) to keep a clean paper trail.
-- **Delete the feature branch after merge.**
+- **Do not delete branches on merge.** Feature branches are kept as the paper trail
+  for the PR that shipped them, and long-lived branches (`main`, `staging`) must never
+  be deleted — never pass `--delete-branch` to `gh pr merge`. This line said "delete
+  the feature branch after merge" until 2026-08-31, which contradicted
+  `.claude/skills/ship/SKILL.md`; a repo cannot hold both rules and have either mean
+  anything, and CodeRabbit flagged the pair.
 
 ## Testing & Verification
 
