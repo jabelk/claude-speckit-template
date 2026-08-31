@@ -80,9 +80,30 @@ for repo in "${FLEET[@]}"; do
   # The remote too: origin/$BRANCH without a local copy (pushed from another
   # machine) would otherwise be silently updated by the `push -u` below —
   # changing a PR branch someone else owns.
-  if git -C "$dir" ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-    echo "  skip: origin/$BRANCH already exists"; skipped=$((skipped+1)); continue
-  fi
+  #
+  # The status is read explicitly rather than as an `if`, because `ls-remote` has
+  # THREE outcomes and only one of them permits the push. Measured 2026-08-31
+  # against this repo's own origin: an existing branch is 0, an absent branch is
+  # 2, and an unreachable remote (no network, expired credential, wrong URL) is
+  # 128. An `if` collapses 2 and 128 into the same proceed branch, so a machine
+  # that cannot reach origin concludes the branch is absent and pushes over it.
+  # That is the fail-open shape recorded at length in
+  # scripts/preflight-vendor-review.sh: an unanswered question is not a "no", and
+  # a check whose failure is indistinguishable from its success is not a check.
+  # CodeRabbit caught it here.
+  remote_status=0
+  git -C "$dir" ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1 || remote_status=$?
+  case "$remote_status" in
+    0)
+      echo "  skip: origin/$BRANCH already exists"; skipped=$((skipped+1)); continue ;;
+    2)
+      : ;;  # absent on the remote — the only status that permits the push below
+    *)
+      echo "  FAILED: could not ask origin whether $BRANCH exists (ls-remote exit $remote_status)"
+      echo "          Not proceeding. The push below would fast-forward a branch that"
+      echo "          may already exist and belong to another machine or person."
+      failed=$((failed+1)); continue ;;
+  esac
   default=$(git -C "$dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||')
   default="${default:-main}"
   echo "  default branch: $default"

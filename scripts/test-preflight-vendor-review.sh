@@ -111,7 +111,7 @@ case_run() {
 # ---------------------------------------------------------------------------
 
 f_clean() { new_repo "$1"; }
-case_run "a clean worktree is safe to send" 0 "0 untracked files" f_clean
+case_run "a clean worktree passes" 0 "0 untracked files" f_clean
 
 f_modified_tracked() {
   new_repo "$1"

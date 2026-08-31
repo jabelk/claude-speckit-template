@@ -54,8 +54,12 @@
 #
 # Usage:  scripts/preflight-vendor-review.sh [REPO_ROOT]
 #         preflight-vendor-review.sh && coderabbit review --base "$BASE" --include-untracked
-# Exit:   0 no untracked files — safe to send the diff to a vendor
+# Exit:   0 no untracked files in this worktree at the moment it ran
 #         2 untracked files present, or the worktree could not be inspected
+#
+# Exit 0 is NOT a verdict that the send is safe. It is one observation, of one
+# class of file, at one instant, and it decays the moment anything writes to the
+# tree — which is why the documented gate calls this twice.
 #
 # There is no exit 1. A refusal and a broken check are the same answer here — do
 # not send — and giving them one code removes the chance of a caller treating one
@@ -98,4 +102,11 @@ if untracked=$(grep '^??' <<<"$worktree"); then
   exit 2
 fi
 
-echo "preflight: 0 untracked files in $(pwd) — safe to send the diff."
+# The success line says what was OBSERVED, not that the send is safe. It said
+# "safe to send the diff" until 2026-08-31, which is a stronger claim than one
+# `git status` supports: it covers only untracked files, only in this worktree,
+# and only at the instant it ran — which is precisely why the documented gate
+# calls this script twice rather than once. A caller quoting "safe to send" as
+# evidence would be quoting a guarantee this script never made. CodeRabbit
+# caught the wording.
+echo "preflight: 0 untracked files in $(pwd) at this moment — the only thing checked."
