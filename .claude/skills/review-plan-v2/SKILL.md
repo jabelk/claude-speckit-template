@@ -20,8 +20,12 @@ scripts/preflight-vendor-review.sh \
   && review-plan-v2 --static-only --plain --base "$BASE" \
   && scripts/preflight-vendor-review.sh \
   && coderabbit review --base "$BASE" --include-untracked
-# leg 1: deterministic only, nothing is billed, nothing leaves the machine
-# leg 2: sends the diff to a vendor; plain text is its default, --plain is NOT a flag
+# leg 1: deterministic only, nothing is billed, nothing leaves the machine.
+#        `--plain` IS a review-plan-v2 flag: `[--plain | --agent]`, plain being
+#        the default. Passed explicitly so the --agent form below is one edit away.
+# leg 2: sends the diff to a vendor. `coderabbit` has NO --plain — plain text is
+#        already its default and the flag is an `unknown option` at exit 1. The
+#        two binaries differ here, so do not carry the flag across.
 # preflight twice on purpose: once to fail fast, once immediately before the send
 ```
 
