@@ -8,102 +8,55 @@ description: Pre-push gate for the current branch's diff. Runs review-plan-v2's 
 **Commit the change first.** Then run this, from the repo root. It is the whole gate,
 and it is one block on purpose — see "One vendor path" below:
 
-Paste these two definitions once per shell. **Every command block in this file
-assumes them**, and each one begins with `preflight &&` — that is the only form in
-which a vendor call appears here.
+Set `BASE` once. **Every command block in this file takes it**, and each one begins
+with `scripts/preflight-vendor-review.sh &&` — that is the only form in which a
+vendor call appears here.
 
 ```bash
 # Prerequisite: the change is COMMITTED. Leg 1 reads the committed diff.
 BASE=main   # or `staging` on repos with a staging branch — set it once, here
 
-# The guard, defined ONCE. The body is `( ... )` — a subshell — so `exit 2` ends the
-# guard and returns 2 to the caller instead of killing an interactive shell.
-preflight() (
-  # Fail CLOSED: a worktree that cannot be inspected is not a clean one.
-  if ! worktree=$(git status --porcelain --untracked-files=all); then
-    echo "STOP: cannot inspect the worktree, so the vendor leg is not safe." >&2
-    exit 2
-  fi
-  # NOT a pipeline, deliberately — see "the guard fell open under pipefail" below.
-  if untracked=$(grep '^??' <<<"$worktree"); then
-    printf '%s\n' "$untracked"
-    echo "STOP: the vendor leg would send the untracked files listed above." >&2
-    exit 2
-  fi
-)
-```
-
-Then the gate itself:
-
-```bash
-preflight \
+scripts/preflight-vendor-review.sh \
   && review-plan-v2 --static-only --plain --base "$BASE" \
-  && preflight \
+  && scripts/preflight-vendor-review.sh \
   && coderabbit review --base "$BASE" --include-untracked
-# leg 1: deterministic only, nothing is billed, nothing leaves the machine
-# leg 2: sends the diff to a vendor; plain text is its default, --plain is NOT a flag
+# leg 1: deterministic only, nothing is billed, nothing leaves the machine.
+#        `--plain` IS a review-plan-v2 flag: `[--plain | --agent]`, plain being
+#        the default. Passed explicitly so the --agent form below is one edit away.
+# leg 2: sends the diff to a vendor. `coderabbit` has NO --plain — plain text is
+#        already its default and the flag is an `unknown option` at exit 1. The
+#        two binaries differ here, so do not carry the flag across.
 # preflight twice on purpose: once to fail fast, once immediately before the send
 ```
 
-**A named guard, because annotating the other blocks did not guard them.** Until
-2026-08-29 this file opened with the two legs alone and put the untracked-file
-check in a second block further down, next to the prose explaining it. A reader
-who copied the first block — the obvious thing to copy, being first and
-complete-looking — got the vendor leg with no guard at all, and the `gitleaks`
-fallback near the bottom had the same hole. The first fix was to keep one guarded
-block and mark the other two sites with comments saying the preflight above still
-applied. CodeRabbit rejected that on the next round and was right to: a comment
-telling a reader what they should have run is not a guard on what they did run,
-and both of those blocks were still copyable, complete, and unguarded. Hence a
-function. The check now exists in exactly one place *and* appears at every vendor
-site, which is what the previous two attempts each got half of.
+**The guard is a script because six review rounds proved prose could not hold it.**
+It lived here, as nine lines of shell in a fenced block, from 2026-08-29 to
+2026-08-31. In that window CodeRabbit caught, in order: the missing `if` (its clean
+result is `grep` exiting 1, so the desired outcome looked like failure); the
+fail-open pipeline capture (`if git status | grep '^??'` reports *grep's* status, so
+a failing `git status` took the proceed branch — the guard called the worktree clean
+exactly when it could not see the worktree); two copyable blocks with no guard at
+all; the "fix" of marking those blocks with a comment saying the guard still applied,
+which is a note about what you should have run rather than a check on what you did;
+a bare `exit 2` that killed the *user's* shell when pasted interactively; the
+`SIGPIPE` fail-open under `pipefail`, where `printf | grep -q` reports 141 and the
+guard proceeds *because* it found too many untracked files to finish listing them;
+and the window between one check and the send.
 
-**The `( ... )` body is the fix for a second thing I had merely apologised for.**
-The guard used to be a bare `if` with `exit 2`, which does the right thing in a
-script and terminates the *user's shell* when pasted into an interactive one —
-this file's answer to that was a note saying "interactively, read the STOP line",
-which is documentation standing in for a defect. A subshell function body makes
-`exit 2` mean "the guard failed", interactively and in a script alike. CodeRabbit
-caught it.
-
-**The guard fell open under `pipefail`, and this file is what turned it on.** The
-check used to be `printf '%s\n' "$worktree" | grep -q '^??'`. `grep -q` exits the
-moment it matches, so on a long list `printf` is still writing when the read end
-closes and takes `SIGPIPE`, exiting 141. With `set -o pipefail` the pipeline
-reports 141 rather than `grep`'s 0, the `if` sees non-zero, and the *proceed*
-branch runs — the guard concludes the worktree is clean because it found too many
-untracked files to finish saying so. Measured on 2026-08-29, `pipefail` set: at 3
-untracked files the guard triggered correctly; at 20,000 it printed
-`status=141` and fell open. Not hypothetical here, either — the structured-output
-block below tells you to `set -o pipefail`, and this file says every block assumes
-the definitions pasted once per shell, so following it in order arms the failure.
-The form above has no pipeline at all: one `grep` reading a here-string, whose
-status is its own, and the captured list is what gets printed. CodeRabbit caught
-it. That is the third time the same guard has been wrong in the direction of
-sending the diff, and all three had the same shape — a status that was not the
-status the guard thought it was reading.
-
-**`preflight` runs twice, because the first call answers about a worktree the send
-does not use.** Between the guard and the vendor leg sits the entire runtime of
-the static leg, which is where an editor autosave, a build artifact, or another
-agent session working in the same tree lands a new untracked file. `--include-untracked`
-then sends a file that no gitleaks run ever saw, which is the exact hole the guard
-exists to close, arrived at through the check rather than around it. The second
-call costs one `git status` and closes the window to the width of a process spawn.
-CodeRabbit caught this, and the reason it is worth taking seriously rather than
-filing as paranoia is that a second session writing into a shared worktree is the
-normal case on this machine, not a contrived one.
-
-**Fail closed, because the guard's clean answer and its broken answer looked the
-same.** The earlier form was `if git status --porcelain -uall | grep '^??'`. When
-`git status` itself fails, `grep` reads empty input and exits 1, so the `else`
-branch runs and the vendor leg proceeds — the guard reports a clean worktree
-precisely when it could not see the worktree. Verified on 2026-08-29 by running
-the old form in a non-repository directory: it printed `fatal: not a git
-repository` and then took the proceed branch. The form above captures the status
-separately and treats a failed capture as its own `exit 2`. CodeRabbit caught this
-one round after catching the missing `if`, which is the same lesson twice: a check
-whose failure mode is indistinguishable from success is not a check.
+Every one of those fixes was correct and every one left the next hole. That stopped
+being an argument about any individual fix: a shell fragment in a Markdown file has
+no mechanism to be wrong out loud — nothing executes it, nothing tests it, and every
+reader is free to paste half of it. So the guard is now
+[`scripts/preflight-vendor-review.sh`](../../../scripts/preflight-vendor-review.sh),
+which carries all six rounds in its header, and
+`scripts/test-preflight-vendor-review.sh`, which hands it a dirty worktree, a
+directory that is not a repository, a path that does not exist, and 20,000 untracked
+files, and fails if any of them passes. The bulk case asserts its own fixture still
+discriminates, because the retired pipeline form only falls open above a byte
+threshold — the 64 KiB pipe buffer, bisected 2026-08-31 at 61,893 bytes correct
+versus 70,893 fell open — so the same test with a few thousand files would pass
+against the broken implementation and read as proof. Run it in a repo that changes
+the script; it takes a few seconds.
 
 **One `BASE` variable, not the branch name typed four times.** Every command in this file — both legs, and the gitleaks fallback further down — takes the same base, and until 2026-08-29 the fallback hardcoded `main` while the primary said "use `--base staging` on repos with a staging branch." On a staging repo that fallback diffs against the wrong branch and still exits 0, which is a gate reporting clean over a range it was never asked about. CodeRabbit caught it.
 
@@ -127,15 +80,13 @@ Two things follow. `all` is a misnomer — it is the committed diff, so the defa
 
 **`--include-untracked` is a detector, not coverage, and it opens the hole the ordering above closes.** Without it `coderabbit review` reads **tracked changes only**, so a file you forgot to `git add` is invisible to the review and its omission looks identical to a clean pass. With it, that file is sent to the vendor — and no `--type` scope puts an untracked file in front of gitleaks, so gitleaks never scanned it. The flag therefore routes exactly the least-reviewed file in the change around the secret scan.
 
-So the untracked check happens **before** either leg, from git, not from CodeRabbit's file count — by the time the second leg reports an extra file it has already sent it. That is `preflight`, defined at the top of this file, and every command block here leads with it.
-
-**The check is wrapped in an `if` rather than left as a bare pipeline because its clean result is a non-zero exit.** `grep '^??'` finding nothing exits **1**, so the outcome you want is the one that looks like failure: as a bare line above the gate under `set -e` the clean case aborts before either leg runs, and without `set -e` it is a line whose output nobody is obliged to read. Wrapping it makes the ordering structural instead of a thing the reader has to remember to honour. This is also why the two `if`s are separate rather than an `if`/`elif`: the first tests whether the worktree could be *read*, the second what it *contains*, and collapsing them invites the fail-open form below.
-
-Between them these paragraphs record six consecutive rounds on one guard: CodeRabbit caught the missing `if`, then the fail-open pipeline capture, then the two unguarded copyable blocks, then the interactive-shell-killing `exit`, then the `SIGPIPE` fail-open under `pipefail`, then the window between the check and the send. Six rounds on nine lines of shell stopped being an argument for making the guard a function some rounds ago; it is an argument for the guard not living in prose at all. A shell fragment in a Markdown file has no mechanism to be wrong out loud — nothing executes it, nothing tests it, and every reader is free to paste half of it. Each of those six fixes was correct and each one left the next hole, which is what iterating on documentation instead of on code buys. The version of this that stops the sequence is a committed script with the guard as its first function and a test that feeds it a dirty worktree, invoked as one command from here.
+So the untracked check happens **before** either leg, from git, not from CodeRabbit's file count — by the time the second leg reports an extra file it has already sent it. That is `scripts/preflight-vendor-review.sh`, and every command block in this file leads with it, for the reasons recorded above.
 
 **The bar is no untracked files at all, not "none belonging to this change."** `--include-untracked` sends every non-ignored untracked file in the worktree, so scratch notes, a pasted credential, a downloaded export, or a colleague's data sample sitting in the tree unrelated to the branch all go to the vendor with it. Deciding which ones "belong to the change" is a judgement made after the send. If a file should be reviewed, commit it and re-run the static leg; if it should not leave the machine, `.gitignore` it or move it out of the tree; if it is genuinely scratch, that is what `.gitignore` is for.
 
-Keep `--include-untracked` anyway, as the backstop that should then find nothing: if it reports files the `reviewing N of M` line did not, that is a scan you skipped, not a bonus. Files matched by `.gitignore` stay excluded either way. If you need a secret scan over the working tree including untracked files, gitleaks does it directly and locally: `gitleaks dir .` (verified on 8.30.1).
+Keep `--include-untracked` anyway, as the backstop that should then find nothing: if it reports files the `reviewing N of M` line did not, that is a scan you skipped, not a bonus. Files matched by `.gitignore` stay excluded either way. If you need a secret scan over the working tree including untracked files, gitleaks does it directly and locally: `gitleaks dir . --redact` (verified on 8.30.1).
+
+**`--redact` on every documented gitleaks command, because a gate that prints the secret it found has published it.** Without it a finding's `Secret:` line carries the credential in full, and that output lands wherever the gate ran: a CI log, a scrollback buffer, an agent transcript, a pasted-into-chat "here's what the scan said." `--redact` is `--redact uint[=100]` and defaults to 100% on both the `git` and `dir` subcommands, so the bare flag is the strongest form. Note the finding detail only prints with `-v` at all — plain `gitleaks git` prints `leaks found: N` and nothing else — which means the exposure arrives the moment someone adds `-v` to find out *which* file, at exactly the moment they are most likely to paste the output somewhere. Verified on 8.30.1.
 
 ## What changed on 2026-08-28, and why it matters to how you read this
 
@@ -167,9 +118,9 @@ Keep running it because it is the half CodeRabbit does not replace: a pre-push s
 
 ```bash
 set -o pipefail   # or check ${PIPESTATUS[0]} / ${pipestatus[1]} in zsh
-preflight \
+scripts/preflight-vendor-review.sh \
   && review-plan-v2 --static-only --agent --base "$BASE" | jq 'select(.type == "finding" or .type == "summary")' \
-  && preflight \
+  && scripts/preflight-vendor-review.sh \
   && coderabbit review --agent --base "$BASE" --include-untracked
 ```
 
@@ -190,15 +141,15 @@ The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → th
 **If the binary is absent, do not fall through to the vendor leg alone.** That was the previous advice here and it was wrong: it sends the diff off the machine with no secret scan in front of it, which is the one sequence this skill exists to preserve. gitleaks is an independent binary and does not need `review-plan-v2`, so it can stand in for leg 1:
 
 ```bash
-# gitleaks substitutes for leg 1 ONLY. `preflight` is still the first thing that runs,
-# and runs again immediately before the send.
-preflight \
-  && gitleaks git --log-opts="$BASE..HEAD" \
-  && preflight \
+# gitleaks substitutes for leg 1 ONLY. The preflight is still the first thing that
+# runs, and runs again immediately before the send.
+scripts/preflight-vendor-review.sh \
+  && gitleaks git --log-opts="$BASE..HEAD" --redact \
+  && scripts/preflight-vendor-review.sh \
   && coderabbit review --base "$BASE" --include-untracked
 ```
 
-**Chained with `&&`, not listed on separate lines.** A leak exits non-zero, and on separate lines the next command runs anyway — sending to the vendor the exact diff the scan just objected to. Use `gitleaks dir .` in place of the `git` form when untracked files are in play; it scans the working tree, which the `git` form does not. Both forms verified on gitleaks 8.30.1.
+**Chained with `&&`, not listed on separate lines.** A leak exits non-zero, and on separate lines the next command runs anyway — sending to the vendor the exact diff the scan just objected to. Use `gitleaks dir . --redact` in place of the `git` form when untracked files are in play; it scans the working tree, which the `git` form does not. Both forms verified on gitleaks 8.30.1, `--redact` on both subcommands.
 
 If gitleaks is not installed either, stop and say the gate cannot run. The remaining lint analyzers are worth having but they are not what stands between a credential and a third party.
 
