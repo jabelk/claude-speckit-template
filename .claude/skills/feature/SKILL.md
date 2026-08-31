@@ -36,6 +36,7 @@ Feed those corrections into the spec. Never plan from memory files alone — sta
 ### Online research
 
 Before specifying or planning, research online:
+
 - Are there better approaches than the obvious one?
 - What do competitors/similar projects do?
 - Any libraries, APIs, or patterns that would save time?

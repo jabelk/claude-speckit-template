@@ -31,6 +31,7 @@ Run this AFTER `/speckit-plan` and `/speckit-tasks` complete, BEFORE `/speckit-i
 ## After the review
 
 Present both reviews to the user with a summary:
+
 - If all GREEN: "All reviewers approve. Safe to implement."
 - If any YELLOW: "Issues flagged — review the concerns below and decide whether to fix before implementing."
 - If any RED: "At least one reviewer recommends rethinking the approach. Address the RED concerns before proceeding."

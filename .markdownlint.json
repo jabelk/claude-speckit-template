@@ -1,0 +1,8 @@
+{
+  "$comment": "markdownlint is one of review-plan-v2's deterministic analyzers, and this repo -- the one that SEEDS every other repo -- was the only one of five without a config. Measured 2026-08-31: `markdownlint .claude/skills/ship/SKILL.md .claude/skills/review-plan-v2/SKILL.md` alone emitted 89 findings, 83 of them MD013 and 6 MD060, both pure style. The skill docs are deliberately one-line-per-paragraph so their prose diffs by paragraph rather than by reflow, and their tables are compact; neither affects rendering. Disabling those two matches internal-claude-workflows, cisco-claude-workflows, aibo-shared-expertise, and team-aibo, so a repo created by `newproject` now starts with the same gate its siblings have rather than inheriting an unpromotable one. That is the point of fixing it HERE: a check that can never be green trains readers to ignore it, and seeding that state into every new repo propagates the defect by construction. MD036 is off for the reason internal-claude-workflows records -- the rule cannot tell a bolded conclusion sentence from a heading, and `markdownlint --fix` rewrote an issue reference `#13` into an H1 on that repo unsupervised.",
+  "default": true,
+  "MD013": false,
+  "MD060": false,
+  "MD041": true,
+  "MD036": false
+}

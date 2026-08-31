@@ -25,12 +25,15 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
 1. **Create your project** — pick the path that fits your workflow:
 
    **(a) One-off, no setup required**:
+
    ```bash
    curl -fsSL https://raw.githubusercontent.com/Sierra-Code-Co/internal-speckit-template/main/scripts/new-project.sh | bash -s my-project
    ```
+
    Clones the template, strips git history, inits a fresh repo, runs `setup.sh`. Good for trying once.
 
    **(b) Daily-driver shell command** (recommended if you create projects often):
+
    ```bash
    # One-time setup — clone the template locally and source the helper from zshrc:
    git clone https://github.com/Sierra-Code-Co/internal-speckit-template.git ~/dev/projects/claude-speckit-template
@@ -42,9 +45,12 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
    newproject my-project --public  # or override visibility
    newproject my-project --no-setup  # skip setup.sh
    ```
+
    This uses `gh repo create --template`, so the new repo lands on your GitHub account immediately (private by default).
-3. **Edit `CLAUDE.md`** — replace `{{PLACEHOLDERS}}` with your project details:
-   ```
+
+2. **Edit `CLAUDE.md`** — replace `{{PLACEHOLDERS}}` with your project details:
+
+   ```text
    {{PROJECT_NAME}}        → Your project name
    {{PROJECT_DESCRIPTION}} → One-line description
    {{LANGUAGE}}            → e.g., Python, TypeScript, Go
@@ -55,13 +61,21 @@ A reusable project template for [Claude Code](https://claude.ai/claude-code) wit
    {{BUILD_COMMAND}}       → e.g., npm run build, cargo build
    {{DEV_COMMAND}}         → e.g., npm run dev, cargo run
    ```
-4. **Set up API keys** for multi-model review (optional):
+
+3. **Set up API keys** for `/review-plan`'s multi-model pre-implementation review (optional):
+
    ```bash
    cp .env.example .env
    # Add your API keys
    ```
-5. **Start Claude Code and run:**
-   ```
+
+   This is `/review-plan` v1 only, which still calls providers on specs and plans.
+   `/review-plan-v2` is the pre-push gate and needs no key: its AI reviewer legs were
+   retired on 2026-08-28 and it runs `--static-only`.
+
+4. **Start Claude Code and run:**
+
+   ```text
    /speckit-constitution   # Establish project principles (once)
    /feature                # Start your first feature
    ```
@@ -100,7 +114,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 The `/feature` skill orchestrates the full development lifecycle:
 
-```
+```text
 Phase 1: Orient     → Read context, check backlog, recommend next work
 Phase 2: Research   → Online research before committing to an approach
 Phase 3: Specify    → /speckit-specify — write the feature spec
@@ -135,7 +149,7 @@ This template uses **GitHub Issues as the primary tracker** — not parallel mar
 
 ### How to use
 
-```
+```text
 You: "Generate a status report Word doc from the last 5 commits."
 You: "Build me a 10-slide deck explaining this feature for non-technical stakeholders."
 You: "Make an Excel workbook with the test-coverage numbers from the last 3 sprints."
@@ -170,9 +184,11 @@ The compliant pattern is therefore: **re-fetch from `github.com/anthropics/skill
 
 - **Python 3.14 has a broken `pyexpat`** on macOS Homebrew at the time of writing — `python3.14 -c "import xml.etree.ElementTree"` fails with `Symbol not found: _XML_SetAllocTrackerActivationThreshold`. This breaks `python-pptx`, `python-docx`, `markitdown`, etc. **Use `python3.13` explicitly** (`brew install python@3.13`). The install script checks for `python3.13` specifically.
 - **Node 25 module resolution**: globally-installed npm packages don't resolve from arbitrary `cwd` without `NODE_PATH`. If you write your own Node script that uses these libraries, set `NODE_PATH=$(npm root -g)` when running:
+
   ```bash
   NODE_PATH=$(npm root -g) node my-build-script.js
   ```
+
   (The skills handle this internally when invoked via Claude — only matters for hand-written scripts.)
 - **`gh repo create --template --internal` requires an org**. Personal accounts only support `--public` and `--private`. The `newproject` helper defaults to `--private`.
 - **macOS PEP 668 / `--break-system-packages`**: if you try `pip3 install python-pptx` directly, macOS-Python refuses by design. Use `uv` or `pipx`, or pass `--break-system-packages` knowingly. The Office skills mostly use the Node libraries, so this rarely bites unless you also want `markitdown` for content extraction.
@@ -203,7 +219,7 @@ End-to-end validated in a real project (the [Grace Church Reno teaching workspac
 
 Edit the `SYSTEM_PROMPT` in `scripts/review-plan.sh` to add framework-specific review focus areas. For example:
 
-```
+```text
 6. FRAMEWORK GOTCHAS: SvelteKit/Svelte 5 specific issues ($derived tracking, rune file restrictions)
 ```
 

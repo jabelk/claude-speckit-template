@@ -224,6 +224,22 @@ f_flow_mapping_key() {
 }
 case_run "rule A: escaped key inside a flow mapping refused" 1 "quotes a key in its frontmatter" f_flow_mapping_key
 
+f_flow_mapping_unquoted() {
+  baseline "$1"
+  # The same key position with no quotes and no escape, which is what rule A does
+  # NOT cover: nothing here is quoted, so rule A has no business firing, and the
+  # question is whether the fixture above was passing for the right reason or
+  # merely because it happened to contain a quote. This is a legal YAML spelling
+  # that Claude Code honours — `{disable-model-invocation: true}` sets the key —
+  # so a script that read it as an absent key would report `rely on the default`
+  # over a skill that is in fact model-disabled. Rule B is what catches it: the
+  # normalised line contains `disablemodelinvocation` and is not one of the two
+  # accepted byte sequences, so it is refused as a form this script will not
+  # interpret rather than guessed at.
+  make_skill "$1" "flowplain" '{disable-model-invocation: true, name: flowplain}'
+}
+case_run "rule B: unquoted flow mapping refused, not read as absent" 1 "in a form this" f_flow_mapping_unquoted
+
 f_explicit_key() {
   baseline "$1"
   # YAML's explicit-key indicator is the other non-start-of-line key position.
