@@ -185,11 +185,29 @@ else
   failed=$((failed + 1)); echo "  FAIL  $BULK untracked files: exit $bulk_status, wanted 2"
 fi
 
-# The cap is announced rather than silent.
-if [ "${bulk_out#*and }" != "$bulk_out" ]; then
-  passed=$((passed + 1)); echo "  ok    the capped listing says how many it did not print"
+# The cap is announced rather than silent, and the number it announces is right.
+#
+# This assertion used to be `[ "${bulk_out#*and }" != "$bulk_out" ]`, which was
+# VACUOUS: the refusal message itself contains "...and no local scan has read
+# them", so the substring matched whether or not the listing announced anything.
+# Verified 2026-08-31 by deleting the `... and %d more` line from a copy of the
+# script under test — the suite still reported `ok    the capped listing says how
+# many it did not print`, 12 passed, exit 0. A vacuous assertion inside the file
+# whose stated thesis is anti-vacuity, caught by CodeRabbit rather than by this
+# suite, which is the lesson worth keeping more than the fix is.
+#
+# The form below derives the cap from the listing actually printed and requires
+# the announced remainder to equal BULK minus it. So it checks the arithmetic,
+# not the presence of a word, and it stays correct if LIST_CAP changes.
+listed=$(grep -c '^  ?? ' <<<"$bulk_out" || true)
+want_more=$((BULK - listed))
+if [ "$listed" -gt 0 ] && [ "${bulk_out#*"... and $want_more more"}" != "$bulk_out" ]; then
+  passed=$((passed + 1)); echo "  ok    the listing printed $listed and announced the other $want_more"
 else
-  failed=$((failed + 1)); echo "  FAIL  the listing was capped without saying so"
+  failed=$((failed + 1))
+  echo "  FAIL  the cap was not announced correctly: printed $listed of $BULK, so the"
+  echo "        output should contain '... and $want_more more' and does not."
+  awk '{ print "          | " $0 }' <<<"$bulk_out"
 fi
 
 # Anti-vacuity. Reproduce the retired form against this same fixture and require
