@@ -25,6 +25,12 @@
 # step's `No such file or directory`, at `summary: 1 ok, 0 failed`, exit 0.
 # 5 passed, 5 failed.
 #
+# Case D is the same shape one layer earlier — a `git status` that FAILS read as
+# a clean worktree — and it carries its own discrimination check rather than a
+# separately staged copy. Its retired form, measured the same day against a git
+# stub whose `status` exits 1, printed `would: checkout ...` and `1 ok, 0 failed`
+# at exit 0 for a repo whose worktree it never managed to inspect.
+#
 # Usage:  scripts/test-fleet-speckit-upgrade.sh
 # Exit:   0 every case passed
 #         1 at least one case failed
@@ -180,6 +186,75 @@ expect "the repo is reported DONE"                   contains "$c_out" "DONE: pu
 expect "the overall exit is 0 (was $c_status)"       status_is "$c_status" 0
 expect "origin has $FIXTURE_BRANCH"                  remote_has_branch gamma
 contains "$c_out" "DONE: pushed" || awk '{ print "          | " $0 }' <<<"$c_out"
+
+# ---------------------------------------------------------------------------
+# D. A `git status` that FAILS is not a clean worktree.
+#
+# `[ -n "$(git -C "$dir" status --porcelain)" ]` reads the output and not the
+# status, and a failing `git status` prints nothing on stdout — so the test is
+# false and the repo proceeds as clean. In dry-run that reaches `ok=$((ok+1))`,
+# which is the shape this case pins: a repo counted as upgradeable by a run that
+# could not see its worktree. Dry-run deliberately, because the count is the
+# subject and the vendoring is not.
+#
+# The stub forwards to real git except for that one call, matched on POSITION so
+# a commit message containing the word "status" does not trip it.
+# ---------------------------------------------------------------------------
+echo "D. a git status that fails is not a clean worktree"
+
+REAL_GIT="$(command -v git)"
+mkdir -p "$TMP/gitfail"
+cat > "$TMP/gitfail/git" <<STUB
+#!/bin/sh
+if [ "\$3" = status ]; then
+  echo "fatal: simulated git status failure" >&2
+  exit 1
+fi
+exec $REAL_GIT "\$@"
+STUB
+chmod +x "$TMP/gitfail/git"
+
+# The retired output-only form, rebuilt from the current one for the same reason
+# case B's is: a checked-in "before" copy drifts, a transformed one cannot.
+# shellcheck disable=SC2016  # the $worktree/$dir here are literal sed patterns
+sed -e '/^  if ! worktree=/,/^  fi$/d' \
+    -e 's|^  if \[ -n "\$worktree" \]; then$|  if [ -n "$(git -C "$dir" status --porcelain)" ]; then|' \
+    "$TPL/scripts/fixed.sh" > "$TPL/scripts/retired-status.sh"
+chmod +x "$TPL/scripts/retired-status.sh"
+# shellcheck disable=SC2016  # ditto: a literal grep pattern, not an expansion
+if ! bash -n "$TPL/scripts/retired-status.sh" 2>/dev/null \
+   || ! grep -q 'if \[ -n "\$(git -C "\$dir" status --porcelain)" \]; then' "$TPL/scripts/retired-status.sh" \
+   || grep -q 'worktree=' "$TPL/scripts/retired-status.sh"; then
+  echo "ERROR: could not rebuild the retired output-only status form. The sed above" >&2
+  echo "       no longer matches the current script, so case D's discrimination" >&2
+  echo "       check would test nothing. Exiting 2 rather than reporting a pass." >&2
+  exit 2
+fi
+
+seed_repo delta || { echo "ERROR: could not build fixture delta" >&2; exit 2; }
+PATH="$TMP/gitfail:$PATH" FLEET_ROOT="$TMP/fleet" FLEET_REPOS=delta \
+  "$TPL/scripts/fixed.sh" > "$TMP/d.out" 2>&1
+d_status=$?; d_out="$(cat "$TMP/d.out")"
+
+expect "the repo is reported FAILED"                    contains "$d_out" "cannot inspect the worktree"
+refute "and NOT counted as upgradeable"                 contains "$d_out" "would: checkout"
+expect "the overall exit is nonzero (was $d_status)"    status_isnt "$d_status" 0
+
+seed_repo epsilon || { echo "ERROR: could not build fixture epsilon" >&2; exit 2; }
+PATH="$TMP/gitfail:$PATH" FLEET_ROOT="$TMP/fleet" FLEET_REPOS=epsilon \
+  "$TPL/scripts/retired-status.sh" > "$TMP/e.out" 2>&1
+e_status=$?; e_out="$(cat "$TMP/e.out")"
+
+if contains "$e_out" "would: checkout" && [ "$e_status" -eq 0 ]; then
+  passed=$((passed + 1))
+  echo "  ok    fixture discriminates: the retired form counted it ok at exit 0"
+else
+  failed=$((failed + 1))
+  echo "  FAIL  fixture is VACUOUS — the retired output-only form did NOT read the"
+  echo "        broken \`git status\` as a clean tree, so the assertions above would"
+  echo "        pass against the very implementation they exist to reject."
+  awk '{ print "          | " $0 }' <<<"$e_out"
+fi
 
 echo ""
 echo "$passed passed, $failed failed"

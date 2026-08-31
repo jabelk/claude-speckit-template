@@ -75,7 +75,18 @@ for repo in "${FLEET[@]}"; do
   if [ ! -d "$dir/.git" ] || [ ! -d "$dir/.specify" ]; then
     echo "  skip: no git repo or no .specify"; skipped=$((skipped+1)); continue
   fi
-  if [ -n "$(git -C "$dir" status --porcelain)" ]; then
+  # `git status`'s STATUS, not only its output. A failing `git status` prints
+  # nothing on stdout, so `[ -n "$(...)" ]` is false and the repo reads as CLEAN —
+  # a tree that could not be inspected counted as `ok`. Third appearance of this
+  # shape in this one change: the `ls-remote` block below and
+  # scripts/preflight-vendor-review.sh are the other two, and CodeRabbit caught
+  # all three. An unanswered question is not a "no".
+  if ! worktree=$(git -C "$dir" status --porcelain); then
+    echo "  FAILED: cannot inspect the worktree (git status failed above), so this"
+    echo "          repo was neither upgraded nor deliberately skipped"
+    failed=$((failed+1)); continue
+  fi
+  if [ -n "$worktree" ]; then
     echo "  skip: working tree dirty"; skipped=$((skipped+1)); continue
   fi
   if git -C "$dir" show-ref --verify --quiet "refs/heads/$BRANCH"; then
