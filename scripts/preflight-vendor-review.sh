@@ -73,8 +73,15 @@
 # lesson stopped being about any individual fix: a shell guard living in a
 # Markdown paragraph has no mechanism to be wrong out loud. This file has one —
 # scripts/test-preflight-vendor-review.sh, which hands it a dirty worktree, an
-# edited tracked file, a non-repository, a broken helper, and 20,000 untracked
-# files, and fails if any of them passes.
+# edited tracked file, a non-repository, a broken helper, an exported GIT_DIR,
+# and 20,000 untracked files, and fails if any of them passes.
+#
+# Rounds 8 and 9 came after the move into this file, and neither was a repeat of
+# the seven. Round 8 WIDENED the check (see WHAT IT REJECTS above) and deleted
+# the last command from the decision. Round 9 is the `unset` below: git's own
+# location variables outranked the `cd`, so the script could inspect a different
+# repository than the one it named. Being a script is what let that one be
+# reproduced in ten lines and pinned by a test, rather than argued about.
 #
 # What it does NOT check: files matched by `.gitignore`. The vendor never
 # receives them, so they are not this script's business.
@@ -97,6 +104,34 @@
 # worktree, at one instant, and it decays the moment anything writes to the
 # tree — which is why the documented gate calls this twice.
 #
+# THE RACE THIS CANNOT CLOSE, stated plainly because the docs previously
+# understated it. Between the second call's exit and the moment the vendor
+# process enumerates the worktree, a concurrent writer can add a file that
+# `--include-untracked` then ships and that no local scan has read. CodeRabbit
+# raised this as CWE-367 on 2026-08-31 and it is correct that the race is real.
+#
+# What was wrong was the width. The fleet docs said the second call "closes the
+# window to the width of a process spawn." NOT VERIFIED, and probably false:
+# the CLI's `Connecting to CodeRabbit...` phase has been observed running past
+# five minutes on this machine, and whether it enumerates the worktree before or
+# after connecting is unknown. So the honest bound is "unknown, possibly the
+# whole connect phase." Two calls NARROW the window. They do not close it, and
+# nothing available here can, because the vendor is a separate process reading a
+# live worktree.
+#
+# The remedy NOT taken, and why. Dropping `--include-untracked` closes the race
+# and was the suggested fix. It also makes a file you forgot to `git add`
+# invisible to the review, so its omission reads exactly like a clean pass —
+# which is the failure class this whole file exists to remove, reintroduced one
+# layer out. Reviewing an immutable snapshot (a throwaway worktree at HEAD) has
+# the same cost: nothing untracked is ever seen. Trading a bounded race for a
+# permanent blind spot is the wrong direction.
+#
+# So the mitigation is the caller's, and it is the one thing actually in the
+# caller's control: do not write into the tree while the gate is running. Two
+# agent sessions sharing a worktree is the ordinary case on this machine, which
+# is what makes this worth a paragraph rather than a shrug.
+#
 # There is no exit 1. A refusal and a broken check are the same answer here — do
 # not send — and giving them one code removes the chance of a caller treating one
 # of them as a pass.
@@ -105,6 +140,29 @@ set -uo pipefail
 # An exported CDPATH corrupts a relative `cd`, and this one takes its target
 # from an argument.
 unset CDPATH
+
+# And git's own location variables outrank the `cd` entirely, which is round 9.
+# With `GIT_DIR`/`GIT_WORK_TREE` exported, `git status` below inspects THAT
+# repository no matter which directory this script entered — so the script
+# answered about a worktree the send does not use, which is the one failure this
+# file exists to prevent. Reproduced 2026-08-31 with two scratch repos, one
+# dirty and holding an unscanned untracked file, one clean:
+#
+#   GIT_DIR=$clean/.git GIT_WORK_TREE=$clean preflight-vendor-review "$dirty"
+#     → "preflight: clean worktree in .../dirty ... " and exit 0
+#
+# Note what that line says: it names the DIRTY path, because `pwd` is honest and
+# `git` was reading somewhere else. A wrong answer that identifies the wrong
+# subject with full confidence is worse than an error, and it is not exotic —
+# git exports these to every hook it runs, so wiring this into a pre-push hook
+# would have armed it. `GIT_INDEX_FILE` is here for the same reason one step in:
+# it redefines what "staged" means, so a stale or empty index file hides a
+# staged change from `--porcelain`. `GIT_COMMON_DIR` likewise redirects the
+# shared metadata a linked worktree resolves through.
+#
+# Unsetting them is not a loss of function: the documented way to point this
+# script at a repository is the REPO_ROOT argument, which still works.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
 
 LIST_CAP=20
 

@@ -208,6 +208,76 @@ f_missing_dir() {
 case_run "a path that does not exist fails CLOSED" 2 "cannot enter" f_missing_dir
 
 # ---------------------------------------------------------------------------
+# Round 9: git's own location variables must not outrank the `cd`.
+#
+# `case_run` cannot express this one, because the defect is in the ENVIRONMENT
+# rather than in the tree — so it gets its own runner. The setup is two repos, one
+# dirty and holding an unscanned untracked file, one clean, and the script is
+# pointed at the DIRTY one while `GIT_DIR`/`GIT_WORK_TREE` point at the clean one.
+#
+# Before the `unset`, that combination exited 0 and printed
+# `clean worktree in .../dirty` — naming the dirty path, because `pwd` was honest
+# and `git` was reading somewhere else. That is worse than an error: a confident
+# answer about the wrong subject. It is also not exotic, since git exports these
+# to every hook it runs.
+# ---------------------------------------------------------------------------
+
+GITENV_DIRTY="$TMP/gitenv-dirty"
+GITENV_CLEAN="$TMP/gitenv-clean"
+new_repo "$GITENV_DIRTY"
+new_repo "$GITENV_CLEAN"
+echo "SECRET=live" > "$GITENV_DIRTY/leaked.txt"   # untracked, so no scan read it
+
+run_with_env() {  # run_with_env <dir> <VAR=VAL>... -> sets env_out / env_status
+  local dir="$1"; shift
+  env_out=""
+  if env_out="$(env "$@" bash "$UNDER_TEST" "$dir" 2>&1)"; then
+    env_status=0
+  else
+    env_status=$?
+  fi
+}
+
+check() {  # check <label> <got-exit> <want-exit> <output> <must-contain-or-empty>
+  local label="$1" got="$2" want="$3" out="$4" text="$5" why=""
+  [ "$got" -eq "$want" ] || why="exit $got, wanted $want"
+  if [ -n "$text" ] && [ "${out#*"$text"}" = "$out" ]; then
+    why="${why:+$why; }output missing: $text"
+  fi
+  if [ -z "$why" ]; then
+    passed=$((passed + 1)); echo "  ok    $label"
+  else
+    failed=$((failed + 1)); echo "  FAIL  $label ($why)" >&2
+    printf '%s\n' "$out" | sed 's/^/          /' >&2
+  fi
+}
+
+run_with_env "$GITENV_DIRTY" \
+  "GIT_DIR=$GITENV_CLEAN/.git" "GIT_WORK_TREE=$GITENV_CLEAN"
+check "an exported GIT_DIR/GIT_WORK_TREE cannot redirect the inspection" \
+  "$env_status" 2 "$env_out" "1 uncommitted change(s)"
+check "and the refusal still names the file in the tree it was pointed at" \
+  "$env_status" 2 "$env_out" "leaked.txt"
+
+# GIT_INDEX_FILE redefines what "staged" means, so an empty one hides a staged
+# change from `--porcelain`. Same class, one step in.
+GITENV_STAGED="$TMP/gitenv-staged"
+new_repo "$GITENV_STAGED"
+echo "SECRET=live" > "$GITENV_STAGED/tracked.txt"
+git -C "$GITENV_STAGED" add tracked.txt
+: > "$TMP/empty-index"
+run_with_env "$GITENV_STAGED" "GIT_INDEX_FILE=$TMP/empty-index"
+check "an exported GIT_INDEX_FILE cannot hide a staged change" \
+  "$env_status" 2 "$env_out" "1 uncommitted change(s)"
+
+# The unset must not break the ordinary case: a clean tree with these exported
+# still passes, so the fix is a narrowing of trust and not a blanket refusal.
+run_with_env "$GITENV_CLEAN" \
+  "GIT_DIR=$GITENV_DIRTY/.git" "GIT_WORK_TREE=$GITENV_DIRTY"
+check "a clean tree still passes with the variables exported (no blanket refusal)" \
+  "$env_status" 0 "$env_out" "clean worktree"
+
+# ---------------------------------------------------------------------------
 # A broken helper cannot manufacture a pass.
 #
 # Rounds 2, 5 and 7 were each one instance of a single class: a helper whose

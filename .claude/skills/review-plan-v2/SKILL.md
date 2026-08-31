@@ -29,34 +29,75 @@ scripts/preflight-vendor-review.sh \
 # preflight twice on purpose: once to fail fast, once immediately before the send
 ```
 
-**The guard is a script because six review rounds proved prose could not hold it.**
-It lived here, as nine lines of shell in a fenced block, from 2026-08-29 to
-2026-08-31. In that window CodeRabbit caught, in order: the missing `if` (its clean
-result is `grep` exiting 1, so the desired outcome looked like failure); the
-fail-open pipeline capture (`if git status | grep '^??'` reports *grep's* status, so
-a failing `git status` took the proceed branch — the guard called the worktree clean
-exactly when it could not see the worktree); two copyable blocks with no guard at
-all; the "fix" of marking those blocks with a comment saying the guard still applied,
-which is a note about what you should have run rather than a check on what you did;
-a bare `exit 2` that killed the *user's* shell when pasted interactively; the
-`SIGPIPE` fail-open under `pipefail`, where `printf | grep -q` reports 141 and the
-guard proceeds *because* it found too many untracked files to finish listing them;
-and the window between one check and the send.
+**The guard is a script because seven review rounds proved prose could not hold it,
+and it has taken nine in total.** It lived here, as nine lines of shell in a fenced
+block, from 2026-08-29 to 2026-08-31. In that window CodeRabbit caught, in order: the
+missing `if` (its clean result is `grep` exiting 1, so the desired outcome looked like
+failure); the fail-open pipeline capture (`if git status | grep '^??'` reports
+*grep's* status, so a failing `git status` took the proceed branch — the guard called
+the worktree clean exactly when it could not see the worktree); two copyable blocks
+with no guard at all; the "fix" of marking those blocks with a comment saying the
+guard still applied, which is a note about what you should have run rather than a
+check on what you did; a bare `exit 2` that killed the *user's* shell when pasted
+interactively; the `SIGPIPE` fail-open under `pipefail`, where `printf | grep -q`
+reports 141 and the guard proceeds *because* it found too many untracked files to
+finish listing them; the window between one check and the send; and last
+`if untracked=$(grep '^??' <<<"$worktree")`, which collapsed grep's three outcomes
+into an `if`'s two, so a `grep` that could not run read as a clean tree.
 
 Every one of those fixes was correct and every one left the next hole. That stopped
 being an argument about any individual fix: a shell fragment in a Markdown file has
 no mechanism to be wrong out loud — nothing executes it, nothing tests it, and every
 reader is free to paste half of it. So the guard is now
 [`scripts/preflight-vendor-review.sh`](../../../scripts/preflight-vendor-review.sh),
-which carries all six rounds in its header, and
-`scripts/test-preflight-vendor-review.sh`, which hands it a dirty worktree, a
-directory that is not a repository, a path that does not exist, and 20,000 untracked
-files, and fails if any of them passes. The bulk case asserts its own fixture still
-discriminates, because the retired pipeline form only falls open above a byte
-threshold — the 64 KiB pipe buffer, bisected 2026-08-31 at 61,893 bytes correct
-versus 70,893 fell open — so the same test with a few thousand files would pass
-against the broken implementation and read as proof. Run it in a repo that changes
-the script; it takes a few seconds.
+which carries every round in its header, and
+`scripts/test-preflight-vendor-review.sh`, which hands it a dirty worktree, an edited
+tracked file, a directory that is not a repository, a path that does not exist, a
+broken helper, an exported `GIT_DIR`, and 20,000 untracked files, and fails if any of
+them passes. The bulk case asserts its own fixture still discriminates, because the
+retired pipeline form only falls open above a byte threshold — the 64 KiB pipe buffer,
+bisected 2026-08-31 at 61,893 bytes correct versus 70,893 fell open — so the same test
+with a few thousand files would pass against the broken implementation and read as
+proof. Run it in a repo that changes the script; it takes a few seconds.
+
+**An eighth round widened what it rejects, and that one was not a fail-open.** It
+checked `^??` alone until 2026-08-31, on the reasoning that `--include-untracked` is
+what routes an unscanned file to the vendor while a tracked file's edits are already
+reachable by gitleaks. The second half was false in this file's own measured numbers:
+leg 1 diffs `$BASE...HEAD`, so an unstaged or staged edit is read by no scan in the
+gate, and the guard passed a staged credential in a tracked file without comment. It
+now refuses any dirty entry, which costs nothing in the intended workflow — the commit
+prerequisite means the tree is clean by definition, and a dirty tree at gate time
+means the prerequisite was skipped or the tree moved mid-gate. The same round removed
+the last `grep` from the decision: it is `[ -n "$worktree" ]` on a variable already in
+hand, with `awk` running only *below* the refusal to word it.
+
+**A ninth round: git's own location variables outranked the script's `cd`.** With
+`GIT_DIR`/`GIT_WORK_TREE` exported, `git status` inspected *that* repository
+regardless of which directory the script entered — and the success line still named
+the directory it was pointed at, because `pwd` was honest while `git` read somewhere
+else. Reproduced 2026-08-31 against two scratch repos: aimed at a dirty tree holding
+an unscanned untracked file, with the variables aimed at a clean one, it printed
+`clean worktree in .../dirty` and exited **0**. Not exotic either — git exports these
+to every hook it runs, so wiring the gate into a pre-push hook would have armed it.
+`GIT_INDEX_FILE` is the same class one step in, since it redefines what "staged"
+means. All four are unset at the top of the script now, with four cases pinning it,
+the fourth checking the fix did not become a blanket refusal.
+
+**Two calls narrow the check-to-send window; they do not close it.** A concurrent
+writer can still land a file between the second call's exit and the moment the vendor
+process enumerates the worktree. CodeRabbit raised it as CWE-367 on 2026-08-31 and the
+race is real; what was wrong was the *width*, since this file said the second call cost
+"one process spawn" and that is NOT VERIFIED and probably false — the CLI's
+`Connecting to CodeRabbit...` phase has run past five minutes on this machine, and
+whether it enumerates the worktree before or after connecting is unknown, so the
+honest bound is "unknown, possibly the whole connect phase." The suggested remedy was
+to drop `--include-untracked`, and that is declined deliberately: it closes the race
+by making a file you forgot to `git add` invisible to the review, so its omission
+reads exactly like a clean pass — the failure class this guard exists to remove,
+reintroduced one layer out. Reviewing an immutable snapshot at HEAD costs the same
+coverage. So the mitigation is the caller's, and it is the only one actually
+available: do not write into the tree while the gate is running.
 
 **One `BASE` variable, not the branch name typed four times.** Every command in this file — both legs, and the gitleaks fallback further down — takes the same base, and until 2026-08-29 the fallback hardcoded `main` while the primary said "use `--base staging` on repos with a staging branch." On a staging repo that fallback diffs against the wrong branch and still exits 0, which is a gate reporting clean over a range it was never asked about. CodeRabbit caught it.
 
