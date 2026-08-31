@@ -30,7 +30,7 @@ scripts/preflight-vendor-review.sh \
 ```
 
 **The guard is a script because seven review rounds proved prose could not hold it,
-and it has taken ten in total.** It lived here, as nine lines of shell in a fenced
+and it has taken eleven in total.** It lived here, as nine lines of shell in a fenced
 block, from 2026-08-29 to 2026-08-31. In that window CodeRabbit caught, in order: the
 missing `if` (its clean result is `grep` exiting 1, so the desired outcome looked like
 failure); the fail-open pipeline capture (`if git status | grep '^??'` reports
@@ -102,6 +102,19 @@ per variable set alone on a clean tree, one with a valid alternate index built b
 `git read-tree HEAD`, and one running the same clean tree with nothing exported that
 must pass, because without it a script refusing everything would score green on all
 four. Suite is 24 cases; seen red at `17 passed, 7 failed` by neutering the refusal.
+
+**An eleventh round fixed the refusal's own advice, which could defeat the refusal.**
+`env -u ...` applies to the command it prefixes and nothing else, so a caller told only
+to "use `env -u`" writes it on `preflight-vendor-review` and leaves the vendor leg
+inheriting the variables — the guard beaten by following its own instructions. Measured
+2026-08-31 with `GIT_DIR` exported: the prefix on the first command of an `&&` chain
+gave `leg1 sees: unset` and then `leg2 sees: /tmp/other-probe-repo/.git`, while `env -u
+... bash -c '<chain>'` gave `unset` for both. The refusal now leads with `unset GIT_DIR
+GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR` in the caller's own shell, shows the
+wrapping form second, and says outright that a prefix on one leg covers only that leg. A
+25th test case asserts that wording, because advice which defeats the guard is part of
+the guard; seen red at `24 passed, 1 failed` by replacing the wrapping form with a bare
+`env -u` mention.
 
 **Two calls narrow the check-to-send window; they do not close it.** A concurrent
 writer can still land a file between the second call's exit and the moment the vendor

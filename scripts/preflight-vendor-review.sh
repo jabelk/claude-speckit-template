@@ -77,14 +77,16 @@
 # location variables one at a time, and 20,000 untracked files, and fails if any
 # of them passes.
 #
-# Rounds 8 to 10 came after the move into this file, and none was a repeat of the
+# Rounds 8 to 11 came after the move into this file, and none was a repeat of the
 # seven. Round 8 WIDENED the check (see WHAT IT REJECTS above) and deleted the
 # last command from the decision. Round 9 found that git's own location variables
 # outranked the `cd`, so the script could inspect a different repository than the
 # one it named, and unset them. Round 10 found that the unset was not enough —
 # the other legs of the gate run in the caller's shell and inherit those
-# variables anyway — so it became a refusal. Being a script is what let all three
-# be reproduced in ten lines and pinned by tests, rather than argued about.
+# variables anyway — so it became a refusal. Round 11 fixed the refusal's own
+# ADVICE, which told the caller to use `env -u ...` without saying it has to wrap
+# the whole chain. Being a script is what let all four be reproduced in ten lines
+# and pinned by tests, rather than argued about.
 #
 # What it does NOT check: files matched by `.gitignore`. The vendor never
 # receives them, so they are not this script's business.
@@ -179,10 +181,22 @@ unset CDPATH
 #
 # Refusing costs nothing legitimate. The documented way to aim this script at a
 # repository is the REPO_ROOT argument. A caller that genuinely needs those
-# variables set for other work runs the gate as
-# `env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR ...`, and
-# a git hook — which git always invokes with them exported — unsets them before
-# calling this, rather than being silently answered about the wrong tree.
+# variables set for other work unsets them in its own shell, and a git hook —
+# which git always invokes with them exported — unsets them before calling this,
+# rather than being silently answered about the wrong tree.
+#
+# ROUND 11 is about how that advice is WORDED, and it is a real trap rather than
+# a nitpick. `env -u ...` applies to the command it prefixes and nothing else, so
+#
+#   env -u GIT_DIR ... preflight-vendor-review && coderabbit review ...
+#
+# silences this refusal and leaves the vendor leg inheriting the variables — the
+# guard defeated by following its own instructions. Measured 2026-08-31 with
+# GIT_DIR exported: prefixing the first command printed `leg1 sees: unset` then
+# `leg2 sees: /tmp/other-probe-repo/.git`, while
+# `env -u ... bash -c '<chain>'` printed `unset` for both. So the message below
+# leads with unsetting in the caller's shell and shows the wrapping form second,
+# spelled out. CodeRabbit raised it on two repos' mirrors of round 10.
 poisoned=""
 for v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR; do
   [ -n "${!v:-}" ] && poisoned="${poisoned:+$poisoned }$v"
@@ -196,8 +210,14 @@ if [ -n "$poisoned" ]; then
   echo "      They redirect what \`git\` reads, so this check and the vendor leg" >&2
   echo "      that follows it can inspect two different repositories. Unsetting" >&2
   echo "      them here would fix only this process — the rest of the gate runs" >&2
-  echo "      in your shell. Unset them there, or run the whole gate under" >&2
-  echo "      \`env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR\`." >&2
+  echo "      in your shell. Unset them THERE:" >&2
+  echo "        unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR" >&2
+  echo "      If you need them for other work, wrap the WHOLE chain, not one leg:" >&2
+  echo "        env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR \\" >&2
+  echo "          bash -c '<the entire gate>'" >&2
+  echo "      An \`env -u\` prefix applies to the command it prefixes and nothing" >&2
+  echo "      else, so putting it on this script alone leaves the vendor leg" >&2
+  echo "      inheriting the variables and this refusal silenced (round 11)." >&2
   echo "      To point this script at a repository, pass it as REPO_ROOT instead." >&2
   exit 2
 fi

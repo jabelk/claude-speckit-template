@@ -208,7 +208,7 @@ f_missing_dir() {
 case_run "a path that does not exist fails CLOSED" 2 "cannot enter" f_missing_dir
 
 # ---------------------------------------------------------------------------
-# Rounds 9 and 10: git's own location variables.
+# Rounds 9 to 11: git's own location variables, and the advice for clearing them.
 #
 # `case_run` cannot express these, because the defect is in the ENVIRONMENT rather
 # than in the tree — so they get their own runner. The setup is two repos, one
@@ -272,6 +272,17 @@ check "an exported GIT_DIR/GIT_WORK_TREE cannot redirect the inspection" \
   "$env_status" 2 "$env_out" "git location variable(s) set"
 check "and the refusal names the variables rather than only refusing" \
   "$env_status" 2 "$env_out" "GIT_DIR GIT_WORK_TREE"
+
+# Round 11: the refusal's ADVICE is part of the guard, so it is asserted like one.
+# `env -u ...` applies to the command it prefixes and nothing else, so a caller
+# told only to "use env -u" writes it on this script and leaves the vendor leg
+# inheriting the variables — the guard defeated by following its own instructions.
+# Measured 2026-08-31 with GIT_DIR exported: the prefix on the first command of an
+# `&&` chain gave `leg1 sees: unset` then `leg2 sees: /tmp/other-probe-repo/.git`,
+# while `env -u ... bash -c '<chain>'` gave `unset` for both. So the message has to
+# say WHOLE chain and show the wrapping form; this case fails if it stops doing so.
+check "the refusal shows the wrapping form, not a bare env -u prefix" \
+  "$env_status" 2 "$env_out" "bash -c '<the entire gate>'"
 
 # One case per variable, each set ALONE, because the refusal is a loop and a loop
 # is where an off-by-one lives. `GIT_COMMON_DIR` had no case at all until round 10
