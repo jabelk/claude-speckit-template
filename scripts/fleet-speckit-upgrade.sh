@@ -18,6 +18,10 @@
 # which is the chore that scripts/assert-skill-invocation.sh exists to end. It
 # now calls that script instead, so the desired state is asserted in one place
 # and this one has no opinion about it.
+#
+# Tested by scripts/test-fleet-speckit-upgrade.sh, which is about one thing: that
+# a failure partway through the vendoring block is reported as a failure. It was
+# not, for the reason recorded at that block.
 set -uo pipefail
 
 # An exported CDPATH corrupts $(cd ... && pwd) on relative paths — the user's
@@ -112,7 +116,31 @@ for repo in "${FLEET[@]}"; do
     ok=$((ok+1)); continue
   fi
 
-  if ( set -e
+  # NOT `if ( set -e ... ); then`. Bash disables errexit for the whole condition
+  # of an `if`, and that suppression reaches INTO an explicit `set -e` in a
+  # subshell used as that condition — so every command below runs regardless of
+  # whether the previous one failed, and the subshell's status is just the status
+  # of its LAST command, the push.
+  #
+  # Measured 2026-08-31 against a fixture repo with a bare local origin and the
+  # assert step pointed at a missing path. The `if`-condition form reported
+  # `DONE: pushed` at exit 0 and CREATED the branch on the remote over a tree the
+  # vendoring never finished building. The form below, same fixture, reported
+  # `FAILED at exit 1`, made no commit, and left the remote with no such branch.
+  # That is the whole defect: the reported outcome was the push's, and the push
+  # was the one step that could still succeed after everything before it failed.
+  #
+  #   $ if ( set -e; false; echo REACHED; false; echo AGAIN ); then echo then; fi
+  #   REACHED
+  #   AGAIN
+  #   then
+  #
+  # Run standalone and read $? instead. `|| status=$?` is NOT a fix — the left
+  # operand of `||` suppresses errexit the same way; only a bare command does not.
+  # This script has no top-level `set -e` to restore, so the two lines below are
+  # the whole fix. The sibling suite scripts/test-preflight-vendor-review.sh
+  # records the identical trap in its own fixture runner.
+  ( set -e
     cd "$dir"
     git checkout -q "$default"
     git pull -q --ff-only
@@ -136,12 +164,31 @@ for repo in "${FLEET[@]}"; do
 specify init re-vendor (pinned CLI v$VER) + skill invocation asserted by
 scripts/assert-skill-invocation.sh + /review-plan gate wired as an
 optional before_implement hook via .specify/extensions.yml."
-    git push -q -u origin "$BRANCH"
-  ); then
+    # An EMPTY expected value means "this ref must not exist when the server
+    # receives the push", so the server rejects rather than fast-forwarding. It
+    # reads as a force flag and is the opposite: it can only create a branch,
+    # never overwrite one, and it fails closed where a plain push succeeds.
+    #
+    # Necessary because the ls-remote check above is stale by the time this line
+    # runs — between them sit a checkout, a pull, a `specify init` re-vendor, an
+    # assert, a copy, and a commit, which is ample time for another machine or a
+    # second session to create $BRANCH. That is the same check-to-send window the
+    # documented gate answers by calling preflight-vendor-review.sh twice, except
+    # here re-checking would only narrow the window and this closes it: the test
+    # and the write are one atomic operation at the server. CodeRabbit caught it,
+    # one round after catching the fail-open in the check it makes redundant.
+    #
+    # Verified on git 2.52.0, 2026-08-31, against two local bare remotes: with
+    # the branch present the push is `! [rejected] ... (stale info)` at exit 1;
+    # with it absent the push succeeds and creates the ref.
+    git push -q --force-with-lease="refs/heads/$BRANCH:" -u origin "$BRANCH"
+  )
+  vend_status=$?
+  if [ "$vend_status" -eq 0 ]; then
     echo "  DONE: pushed $BRANCH"
     ok=$((ok+1))
   else
-    echo "  FAILED (repo left on $BRANCH or partial — inspect by hand)"
+    echo "  FAILED at exit $vend_status (repo left on $BRANCH or partial — inspect by hand)"
     failed=$((failed+1))
   fi
 done
