@@ -17,11 +17,14 @@
 # form does not fall open, which means the test tells you when it has stopped
 # testing anything instead of going quietly green.
 #
-# Seen red, 2026-08-31: against a staged copy of the guard carrying the retired
-# two-outcome `if untracked=$(grep ...)` form, the grep-fail-closed case failed
-# with `exit 0, wanted 2` and the output line `preflight: 0 untracked files in
-# .../grepfail at this moment — the only thing checked` — the clean-tree pass,
-# printed by a run whose `grep` never searched. 13 passed, 1 failed, exit 1.
+# Seen red, 2026-08-31, twice. Against a staged copy carrying the retired
+# two-outcome `if untracked=$(grep ...)` form, the fail-closed case failed with
+# `exit 0, wanted 2` and printed the clean-tree pass from a run whose `grep` never
+# searched. Then against a copy carrying the retired narrow `^??` decision, the
+# two tracked-edit cases failed the same way — a staged credential in a tracked
+# file, reported clean. Both reds are recorded because the second is the one a
+# reader is likely to mistake for a regression: the tracked-file cases assert the
+# OPPOSITE of what they asserted before that date.
 #
 # Usage:  scripts/test-preflight-vendor-review.sh
 #         BULK=1000 scripts/test-preflight-vendor-review.sh   # expected to FAIL
@@ -117,20 +120,55 @@ case_run() {
 # ---------------------------------------------------------------------------
 
 f_clean() { new_repo "$1"; }
-case_run "a clean worktree passes" 0 "0 untracked files" f_clean
+case_run "a clean worktree passes" 0 "clean worktree" f_clean
 
+# These two BLOCK as of 2026-08-31, and until then they asserted the opposite —
+# `0 untracked files` at exit 0 — on the reasoning that gitleaks could already
+# reach a tracked file's edits. It cannot: leg 1 diffs `$BASE...HEAD`, so an
+# unstaged or staged edit is read by no scan in the gate. Flipping an assertion
+# is worth more comment than adding one, because a reader who trusts the old
+# label will read the new behaviour as a regression.
 f_modified_tracked() {
   new_repo "$1"
   echo "edited" > "$1/tracked.txt"
 }
-case_run "an uncommitted change to a TRACKED file does not block" 0 "0 untracked files" f_modified_tracked
+case_run "an unstaged edit to a TRACKED file is refused" 2 "1 uncommitted change(s)" f_modified_tracked
+case_run "and the refusal names it" 2 "tracked.txt" f_modified_tracked
 
 f_staged_tracked() {
   new_repo "$1"
   echo "staged" > "$1/tracked.txt"
   git -C "$1" add tracked.txt
 }
-case_run "a staged change to a tracked file does not block" 0 "0 untracked files" f_staged_tracked
+case_run "a STAGED edit to a tracked file is refused (plain git diff misses it too)" 2 "1 uncommitted change(s)" f_staged_tracked
+
+# Anti-vacuity for the widening, same shape as the SIGPIPE case at the bottom:
+# reproduce the retired narrow decision against a tracked-edit fixture and require
+# it to PASS. If it refuses too, the two cases above would go green against the
+# very implementation they exist to reject.
+NARROW_DIR="$TMP/narrow"
+new_repo "$NARROW_DIR"
+echo "edited" > "$NARROW_DIR/tracked.txt"
+retired_narrow_status=0
+(
+  cd "$NARROW_DIR" || exit 9
+  worktree=$(git status --porcelain --untracked-files=all)
+  # The retired `^??`-only decision, verbatim in shape.
+  untracked=$(grep '^??' <<<"$worktree")
+  [ -z "$untracked" ] || exit 2
+  exit 0
+) && retired_narrow_status=0 || retired_narrow_status=$?
+
+if [ "$retired_narrow_status" -eq 0 ]; then
+  passed=$((passed + 1))
+  echo "  ok    fixture discriminates: the retired ^??-only decision passed the tracked edit"
+else
+  failed=$((failed + 1))
+  echo "  FAIL  fixture is VACUOUS — the retired ^??-only decision ALSO refused"
+  echo "        (status $retired_narrow_status), so the two cases above would pass against the"
+  echo "        narrow implementation they exist to reject. Check the fixture edits a"
+  echo "        TRACKED file rather than creating a new one."
+fi
 
 f_gitignored() {
   new_repo "$1"
@@ -139,7 +177,7 @@ f_gitignored() {
   git -C "$1" add .gitignore
   git -C "$1" -c user.email=t@example.invalid -c user.name=t commit -q -m ignore
 }
-case_run "a gitignored file does not block (the vendor never receives it)" 0 "0 untracked files" f_gitignored
+case_run "a gitignored file does not block (the vendor never receives it)" 0 "clean worktree" f_gitignored
 
 # ---------------------------------------------------------------------------
 # The refusals.
@@ -149,7 +187,7 @@ f_one_untracked() {
   new_repo "$1"
   echo "pasted credential" > "$1/scratch-notes.txt"
 }
-case_run "one untracked file is refused" 2 "1 untracked file(s)" f_one_untracked
+case_run "one untracked file is refused" 2 "1 uncommitted change(s) above, 1 of them untracked" f_one_untracked
 case_run "the refusal NAMES the file rather than only counting it" 2 "scratch-notes.txt" f_one_untracked
 
 f_untracked_in_subdir() {
@@ -170,59 +208,171 @@ f_missing_dir() {
 case_run "a path that does not exist fails CLOSED" 2 "cannot enter" f_missing_dir
 
 # ---------------------------------------------------------------------------
-# A `grep` that cannot run, with the assertion that makes it non-vacuous.
+# Rounds 9 to 11: git's own location variables, and the advice for clearing them.
 #
-# The fixture worktree is CLEAN, so exit 2 here can only come from the check on
-# grep's status — which is what makes the case unambiguous. `grep` has three
-# outcomes and `if` has two, so the retired `if untracked=$(grep ...)` form reads
-# an operational error as "matched nothing" and reports the clean-tree pass.
+# `case_run` cannot express these, because the defect is in the ENVIRONMENT rather
+# than in the tree — so they get their own runner. The setup is two repos, one
+# dirty and holding an unscanned untracked file, one clean, and the script is
+# pointed at the DIRTY one while `GIT_DIR`/`GIT_WORK_TREE` point at the clean one.
+#
+# Round 9: that combination exited 0 and printed `clean worktree in .../dirty` —
+# naming the dirty path, because `pwd` was honest and `git` was reading somewhere
+# else. A confident answer about the wrong subject, and not exotic either, since
+# git exports these to every hook it runs. Round 9 unset them.
+#
+# Round 10: unsetting them is not enough, and these cases assert the STRONGER
+# behaviour that replaced it. The gate is an `&&` chain, so `review-plan-v2` and
+# `coderabbit review` run in the caller's shell and inherit the variables anyway
+# — the send can enumerate a repository this script never looked at. A child
+# cannot unset a variable in its parent, so the script now REFUSES while any of
+# the four is set, whatever the tree looks like.
+#
+# Which means the assertion below flipped: a CLEAN tree with `GIT_DIR` exported
+# used to be required to exit 0 (proof the unset was a narrowing of trust rather
+# than a blanket refusal) and is now required to exit 2. A reader who trusts the
+# old label will read the new behaviour as a regression, so it is spelled out.
+# The proof that this is not a blanket refusal now rests where it belongs: the
+# clean-worktree case at the top of this file runs with no such variable set and
+# must still pass.
 # ---------------------------------------------------------------------------
 
-STUB_DIR="$TMP/grepfail"
-new_repo "$STUB_DIR"
-mkdir -p "$TMP/stubbin"
-printf '#!/bin/sh\nexit 2\n' > "$TMP/stubbin/grep"
-chmod +x "$TMP/stubbin/grep"
+GITENV_DIRTY="$TMP/gitenv-dirty"
+GITENV_CLEAN="$TMP/gitenv-clean"
+new_repo "$GITENV_DIRTY"
+new_repo "$GITENV_CLEAN"
+echo "SECRET=live" > "$GITENV_DIRTY/leaked.txt"   # untracked, so no scan read it
 
-stub_out=""
-stub_status=0
-if stub_out="$(PATH="$TMP/stubbin:$PATH" bash "$UNDER_TEST" "$STUB_DIR" 2>&1)"; then
-  stub_status=0
-else
-  stub_status=$?
-fi
-
-if [ "$stub_status" -eq 2 ] && [ "${stub_out#*"grep exited 2"}" != "$stub_out" ]; then
-  passed=$((passed + 1)); echo "  ok    a grep that cannot run fails CLOSED (exit 2)"
-else
-  failed=$((failed + 1))
-  echo "  FAIL  a broken grep did not fail closed: exit $stub_status, wanted 2 with 'grep exited 2'"
-  awk '{ print "          | " $0 }' <<<"$stub_out"
-fi
-
-# Anti-vacuity, same shape as the bulk case below: reproduce the retired form
-# against this same stub and require it to fall open.
-retired_grep_status=0
-(
-  export PATH="$TMP/stubbin:$PATH"
-  cd "$STUB_DIR" || exit 9
-  worktree=$(git status --porcelain --untracked-files=all)
-  # The retired two-outcome form, verbatim in shape.
-  if untracked=$(grep '^??' <<<"$worktree"); then
-    : "$untracked"
-    exit 2
+run_with_env() {  # run_with_env <dir> <VAR=VAL>... -> sets env_out / env_status
+  local dir="$1"; shift
+  env_out=""
+  if env_out="$(env "$@" bash "$UNDER_TEST" "$dir" 2>&1)"; then
+    env_status=0
+  else
+    env_status=$?
   fi
-  exit 0
-) && retired_grep_status=0 || retired_grep_status=$?
+}
 
-if [ "$retired_grep_status" -eq 0 ]; then
-  passed=$((passed + 1))
-  echo "  ok    fixture discriminates: the retired if-condition form read the broken grep as clean"
+check() {  # check <label> <got-exit> <want-exit> <output> <must-contain-or-empty>
+  local label="$1" got="$2" want="$3" out="$4" text="$5" why=""
+  [ "$got" -eq "$want" ] || why="exit $got, wanted $want"
+  if [ -n "$text" ] && [ "${out#*"$text"}" = "$out" ]; then
+    why="${why:+$why; }output missing: $text"
+  fi
+  if [ -z "$why" ]; then
+    passed=$((passed + 1)); echo "  ok    $label"
+  else
+    failed=$((failed + 1)); echo "  FAIL  $label ($why)" >&2
+    printf '%s\n' "$out" | sed 's/^/          /' >&2
+  fi
+}
+
+run_with_env "$GITENV_DIRTY" \
+  "GIT_DIR=$GITENV_CLEAN/.git" "GIT_WORK_TREE=$GITENV_CLEAN"
+check "an exported GIT_DIR/GIT_WORK_TREE cannot redirect the inspection" \
+  "$env_status" 2 "$env_out" "git location variable(s) set"
+check "and the refusal names the variables rather than only refusing" \
+  "$env_status" 2 "$env_out" "GIT_DIR GIT_WORK_TREE"
+
+# Round 11: the refusal's ADVICE is part of the guard, so it is asserted like one.
+# `env -u ...` applies to the command it prefixes and nothing else, so a caller
+# told only to "use env -u" writes it on this script and leaves the vendor leg
+# inheriting the variables — the guard defeated by following its own instructions.
+# Measured 2026-08-31 with GIT_DIR exported: the prefix on the first command of an
+# `&&` chain gave `leg1 sees: unset` then `leg2 sees: /tmp/other-probe-repo/.git`,
+# while `env -u ... bash -c '<chain>'` gave `unset` for both. So the message has to
+# say WHOLE chain and show the wrapping form; this case fails if it stops doing so.
+check "the refusal shows the wrapping form, not a bare env -u prefix" \
+  "$env_status" 2 "$env_out" "bash -c '<the entire gate>'"
+
+# One case per variable, each set ALONE, because the refusal is a loop and a loop
+# is where an off-by-one lives. `GIT_COMMON_DIR` had no case at all until round 10
+# while the docs implied all four were covered — CodeRabbit caught the claim, not
+# a bug, and the answer to an overclaimed test is a test rather than softer wording.
+for v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR; do
+  run_with_env "$GITENV_CLEAN" "$v=$GITENV_DIRTY/.git"
+  check "$v alone is refused, on a CLEAN tree, naming itself" \
+    "$env_status" 2 "$env_out" "$v"
+done
+
+# `GIT_INDEX_FILE` gets one more case, because the round-9 version of it was
+# VACUOUS in a way worth recording. It passed an EMPTY index file, and an empty
+# index is not a redefinition of "staged" — it is a broken file: measured
+# 2026-08-31, `GIT_INDEX_FILE=/tmp/empty git status --porcelain` exits **128**
+# with `index file smaller than expected`. So the old case was satisfied by the
+# fail-closed path for unreadable repositories and proved nothing about the
+# variable. With a VALID alternate index built from `HEAD`, `git status` exits 0
+# and reports ` M tracked.txt` instead of `M  tracked.txt` — the staged-ness is
+# hidden, the change is not, because `--porcelain -uall` compares the worktree to
+# HEAD as well. CodeRabbit caught it; the round-10 refusal makes the distinction
+# moot, and this case pins the valid-index form so it stays moot.
+GITENV_STAGED="$TMP/gitenv-staged"
+new_repo "$GITENV_STAGED"
+echo "SECRET=live" > "$GITENV_STAGED/tracked.txt"
+git -C "$GITENV_STAGED" add tracked.txt
+GIT_INDEX_FILE="$TMP/alt-index" git -C "$GITENV_STAGED" read-tree HEAD
+run_with_env "$GITENV_STAGED" "GIT_INDEX_FILE=$TMP/alt-index"
+check "a VALID alternate GIT_INDEX_FILE is refused too (not via the 128 path)" \
+  "$env_status" 2 "$env_out" "GIT_INDEX_FILE"
+
+# Anti-vacuity for the four cases above: the refusal has to come from the
+# ENVIRONMENT, not from the tree. Same fixture, same clean tree, nothing exported
+# — it must pass. Without this, a script that refused everything would score four
+# green cases and read as proof.
+run_with_env "$GITENV_CLEAN"
+check "fixture discriminates: the same clean tree passes with nothing exported" \
+  "$env_status" 0 "$env_out" "clean worktree"
+
+# ---------------------------------------------------------------------------
+# A broken helper cannot manufacture a pass.
+#
+# Rounds 2, 5 and 7 were each one instance of a single class: a helper whose
+# operational error was indistinguishable from its "found nothing" answer, sitting
+# ABOVE the decision. The current script has no command above the decision at all
+# — the test is `[ -n "$worktree" ]` on a variable already in hand, and `awk` runs
+# only to word a refusal that has already been made.
+#
+# So this case pins the ORDERING rather than any one helper's status handling. A
+# stub `awk` that always fails must leave a dirty tree refused (the number in the
+# message may be wrong; the verdict may not be), and must leave a clean tree
+# passing, because on a clean tree awk is never reached.
+# ---------------------------------------------------------------------------
+
+mkdir -p "$TMP/stubbin"
+printf '#!/bin/sh\nexit 2\n' > "$TMP/stubbin/awk"
+chmod +x "$TMP/stubbin/awk"
+
+run_with_stub() {  # run_with_stub <dir> -> sets stub_out / stub_status
+  stub_out=""
+  if stub_out="$(PATH="$TMP/stubbin:$PATH" bash "$UNDER_TEST" "$1" 2>&1)"; then
+    stub_status=0
+  else
+    stub_status=$?
+  fi
+}
+
+DIRTY_STUB="$TMP/awkfail-dirty"
+new_repo "$DIRTY_STUB"
+echo "pasted credential" > "$DIRTY_STUB/scratch.txt"
+run_with_stub "$DIRTY_STUB"
+if [ "$stub_status" -eq 2 ]; then
+  passed=$((passed + 1)); echo "  ok    a broken awk still refuses a dirty tree (exit 2)"
 else
   failed=$((failed + 1))
-  echo "  FAIL  fixture is VACUOUS — the retired if-condition form also refused"
-  echo "        (status $retired_grep_status), so the case above would pass against the very"
-  echo "        implementation it exists to reject. Check the grep stub is on PATH."
+  echo "  FAIL  a broken awk turned a dirty tree into exit $stub_status, wanted 2 —"
+  echo "        which means something above the decision can fail open again."
+  awk_out_dump=$(printf '%s\n' "$stub_out")
+  printf '%s\n' "$awk_out_dump" | sed 's/^/          | /'
+fi
+
+CLEAN_STUB="$TMP/awkfail-clean"
+new_repo "$CLEAN_STUB"
+run_with_stub "$CLEAN_STUB"
+if [ "$stub_status" -eq 0 ]; then
+  passed=$((passed + 1)); echo "  ok    and a broken awk does not affect a clean tree (never reached)"
+else
+  failed=$((failed + 1))
+  echo "  FAIL  a broken awk changed the clean-tree verdict: exit $stub_status, wanted 0."
+  echo "        awk is supposed to run only inside the refusal branch."
 fi
 
 # ---------------------------------------------------------------------------
