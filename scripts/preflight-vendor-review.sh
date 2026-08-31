@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # preflight-vendor-review.sh — refuse to run a provider-backed review while the
-# worktree holds untracked files.
+# worktree is dirty.
 #
 # `coderabbit review --include-untracked` sends EVERY non-ignored untracked file
 # in the worktree to a vendor, not only the ones related to the change: scratch
@@ -11,8 +11,32 @@
 # The bar is therefore not "nothing belonging to the change" but nothing at all:
 # commit what should be reviewed, `.gitignore` or move what should not.
 #
+# WHAT IT REJECTS: any dirty entry `git status --porcelain -uall` reports, not
+# only `^??`. It checked `^??` alone until 2026-08-31, on the reasoning that
+# `--include-untracked` is the thing routing an unscanned file to the vendor and
+# that uncommitted edits to TRACKED files are already reachable by gitleaks. The
+# second half of that was false, and it was false in this repo's own documented
+# numbers: leg 1 of the gate is `review-plan-v2 --static-only`, whose default
+# `--type all` diffs `$BASE...HEAD`, so gitleaks never reads the working tree at
+# all. A tracked file with staged or unstaged edits was therefore scanned by
+# nothing, and the guard passed it without comment.
+#
+# The narrow form also required a rationale the widened one does not: the gate's
+# documented prerequisite is that the change is COMMITTED, so in the intended
+# workflow the tree is clean by definition and this costs nothing. A dirty tree
+# at gate time means either that prerequisite was skipped or the tree changed
+# mid-gate, and both are reasons to stop rather than to send. The old header
+# argued the reverse — that widening would make the guard "fire on the ordinary
+# state of a working session and get switched off" — which described a workflow
+# the gate never sanctioned.
+#
+# NOT VERIFIED here, and deliberately not relied on: whether the CodeRabbit CLI
+# itself uploads working-tree content for tracked files. `.claude/skills/
+# review-plan-v2/SKILL.md` in a sibling repo asserts it does. The reason above
+# stands either way, so this script does not rest on that claim.
+#
 # WHY THIS IS A SCRIPT. It was nine lines of shell inside a fenced block in
-# .claude/skills/ship/SKILL.md, and it took six consecutive review rounds:
+# .claude/skills/ship/SKILL.md, and it took seven consecutive review rounds:
 #
 #   1. It was a bare pipeline, not an `if` — and its clean result is `grep`
 #      exiting 1, so under `set -e` the clean case aborted before either leg ran
@@ -39,18 +63,21 @@
 #   6. It ran once, and the gap between the check and the send is the whole
 #      runtime of the static leg — where an editor autosave, a build artifact, or
 #      a second agent session in the same worktree drops a new file.
+#   7. `if untracked=$(grep '^??' <<<"$worktree")` collapsed grep's three
+#      outcomes into an `if`'s two, so a `grep` that could not run read as a
+#      clean tree. This was the round that created this file, and the first fix
+#      here was to read grep's status explicitly. The line no longer exists:
+#      see the decision block below for why the whole class went with it.
 #
 # Every one of those fixes was correct and every one left the next hole. The
 # lesson stopped being about any individual fix: a shell guard living in a
 # Markdown paragraph has no mechanism to be wrong out loud. This file has one —
-# scripts/test-preflight-vendor-review.sh, which hands it a dirty worktree, a
-# non-repository, and 20,000 untracked files, and fails if any of them passes.
+# scripts/test-preflight-vendor-review.sh, which hands it a dirty worktree, an
+# edited tracked file, a non-repository, a broken helper, and 20,000 untracked
+# files, and fails if any of them passes.
 #
-# What it does NOT check, deliberately: uncommitted changes to TRACKED files.
-# Those are already in git's index or history, so gitleaks has a range that can
-# reach them and they are not the class of file this exists to stop. Widening the
-# check to them would make the guard fire on the ordinary state of a working
-# session and get switched off.
+# What it does NOT check: files matched by `.gitignore`. The vendor never
+# receives them, so they are not this script's business.
 #
 # Usage:  preflight-vendor-review [REPO_ROOT]        # on PATH, from any repo
 #         scripts/preflight-vendor-review.sh [REPO_ROOT]   # a repo carrying a copy
@@ -63,11 +90,11 @@
 # bootstrapped repo has to work before anything is installed, and its skills call
 # the relative form. Keep the two byte-identical — a divergence means one of them
 # has an unfixed round of the history above.
-# Exit:   0 no untracked files in this worktree at the moment it ran
-#         2 untracked files present, or the worktree could not be inspected
+# Exit:   0 the worktree held no dirty entry at the moment it ran
+#         2 a dirty entry was present, or the worktree could not be inspected
 #
 # Exit 0 is NOT a verdict that the send is safe. It is one observation, of one
-# class of file, at one instant, and it decays the moment anything writes to the
+# worktree, at one instant, and it decays the moment anything writes to the
 # tree — which is why the documented gate calls this twice.
 #
 # There is no exit 1. A refusal and a broken check are the same answer here — do
@@ -95,48 +122,43 @@ if ! worktree=$(git status --porcelain --untracked-files=all); then
   exit 2
 fi
 
-# NOT a pipeline — see round 5. One `grep` over a here-string, whose exit status
-# is its own and whose captured output is what gets printed.
+# ANY dirty entry, not only `^??`. See "WHAT IT REJECTS" above.
 #
-# And NOT `if untracked=$(grep ...)`, because `grep` has THREE outcomes and an
-# `if` has two: 0 matched, 1 matched nothing, and anything above 1 an operational
-# error. The `if` form folds that third case into its else branch, so a `grep`
-# that never searched reads exactly like a clean worktree and the script exits 0.
-# Same fail-open shape as rounds 2 and 5, in the one line that had survived both.
-# Measured 2026-08-31 with a `grep` stub exiting 2 ahead of the real one on PATH:
-# the `if` form printed "0 untracked files ... the only thing checked" at exit 0.
-# CodeRabbit caught it on the round that created this file.
-untracked=$(grep '^??' <<<"$worktree")
-grep_status=$?
-if [ "$grep_status" -gt 1 ]; then
-  echo "STOP: grep exited $grep_status, so the worktree was never searched for" >&2
-  echo "      untracked files. A check that could not run is not a clean tree." >&2
-  exit 2
-fi
+# The decision is one `[ -n ]` over a variable already in hand. There is no
+# `grep`, no pipeline, and no second call to anything, which is what retires the
+# whole failure class rounds 2, 5, and 7 each found one instance of: every one of
+# those was a helper whose operational error was indistinguishable from its
+# "found nothing" answer. `grep` has THREE outcomes and an `if` has two, `grep -q`
+# takes SIGPIPE under `pipefail`, `grep -c ... || true` swallows both — and none
+# of that can arise in a test with no command in it.
+#
+# Everything that can still fail is BELOW the refusal, not above it, and that
+# ordering is the design rather than an accident of layout: from here on a broken
+# helper can garble the wording of a refusal and cannot manufacture a pass.
+if [ -n "$worktree" ]; then
+  # `awk`, not `grep -c`, and its exit status is deliberately not consulted:
+  # these two numbers only shape the message. If awk fails they read 0 and the
+  # refusal still stands, because the decision was made on the line above.
+  total=$(awk 'END { print NR }' <<<"$worktree")
+  untracked=$(awk '/^\?\?/ { n++ } END { print n+0 }' <<<"$worktree")
 
-if [ "$grep_status" -eq 0 ]; then
-  # awk counts the lines grep actually returned. This was `grep -c '^??' ...
-  # || true`, a second call with the same three outcomes, where the `|| true`
-  # masked the operational error and left `count` EMPTY — so the refusal read
-  # `STOP:  untracked file(s) above`, blank where the number goes.
-  count=$(awk 'END { print NR }' <<<"$untracked")
   # The listing is capped and says so. A cap that stays quiet reads as "these are
   # all of them", which is the same class of lie as the rest of this file.
-  awk -v cap="$LIST_CAP" -v total="$count" '
+  awk -v cap="$LIST_CAP" -v total="$total" '
     NR <= cap { print "  " $0 }
     END { if (total > cap) printf "  ... and %d more\n", total - cap }
-  ' <<<"$untracked" >&2
-  echo "STOP: $count untracked file(s) above would be sent to the vendor by" >&2
-  echo "      --include-untracked, and no local scan has read them. Commit what" >&2
+  ' <<<"$worktree" >&2
+  echo "STOP: $total uncommitted change(s) above, $untracked of them untracked." >&2
+  echo "      A provider-backed review would send them, and leg 1 diffs" >&2
+  echo "      \$BASE...HEAD, so no local scan has read any of them. Commit what" >&2
   echo "      should be reviewed; .gitignore or move what should not." >&2
   exit 2
 fi
 
 # The success line says what was OBSERVED, not that the send is safe. It said
 # "safe to send the diff" until 2026-08-31, which is a stronger claim than one
-# `git status` supports: it covers only untracked files, only in this worktree,
-# and only at the instant it ran — which is precisely why the documented gate
-# calls this script twice rather than once. A caller quoting "safe to send" as
-# evidence would be quoting a guarantee this script never made. CodeRabbit
-# caught the wording.
-echo "preflight: 0 untracked files in $(pwd) at this moment — the only thing checked."
+# `git status` supports: it covers one worktree at one instant — which is
+# precisely why the documented gate calls this script twice rather than once. A
+# caller quoting "safe to send" as evidence would be quoting a guarantee this
+# script never made. CodeRabbit caught the wording.
+echo "preflight: clean worktree in $(pwd) at this moment — the only thing checked."
