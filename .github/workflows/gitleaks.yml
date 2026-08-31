@@ -10,13 +10,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Full history, because the scan is over a commit *range*.
           fetch-depth: 0
       - name: Install & run gitleaks on the PR diff
+        env:
+          # Pinned, and resolved from no API call. This step used to ask
+          # `api.github.com/.../releases/latest` for the version, which failed twice over:
+          # the runner is unauthenticated there, so a 403 rate-limit answer killed the job
+          # under `set -e` before gitleaks ever ran (2026-08-31, run 33443852922, exit 22)
+          # — and a scan whose scanner floats can go red tomorrow on a diff that was green
+          # today. Bump these two values together, deliberately;
+          # `gitleaks_<VERSION>_checksums.txt` on the release carries the digest.
+          #
+          # This is the arrangement another repo on this machine landed on 2026-08-28 after
+          # the same 403. Copied rather than re-invented, because two repos solving one
+          # failure two ways is how the fleet drifts.
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
         run: |
           set -euo pipefail
-          TAG=$(curl -sSfL https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
-                | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${TAG}/gitleaks_${TAG}_linux_x64.tar.gz" \
-            | tar -xz gitleaks
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          if ! curl -sSfL --retry 3 --retry-delay 5 -o "$archive" \
+              "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"; then
+            echo "::error::could not download gitleaks ${GITLEAKS_VERSION}. This is an install"
+            echo "::error::failure, NOT a secret finding — nothing was scanned."
+            exit 1
+          fi
+          # Verified before extraction, not after: an unverified archive is code this job
+          # then runs, and the job's whole purpose is to be the thing a malicious commit has
+          # to get past. A silently swapped binary that exits 0 is a gate reporting clean.
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" gitleaks
+          ./gitleaks version
           ./gitleaks detect --source . --redact --no-banner --exit-code 1 \
             --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
