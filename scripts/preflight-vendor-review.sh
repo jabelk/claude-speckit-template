@@ -52,8 +52,17 @@
 # check to them would make the guard fire on the ordinary state of a working
 # session and get switched off.
 #
-# Usage:  scripts/preflight-vendor-review.sh [REPO_ROOT]
-#         preflight-vendor-review.sh && coderabbit review --base "$BASE" --include-untracked
+# Usage:  preflight-vendor-review [REPO_ROOT]        # on PATH, from any repo
+#         scripts/preflight-vendor-review.sh [REPO_ROOT]   # a repo carrying a copy
+#         preflight-vendor-review && coderabbit review --base "$BASE" --include-untracked
+#
+# This repo is the canonical copy and `~/.local/bin/preflight-vendor-review`
+# symlinks to it, same arrangement as `review-plan-v2`. So the documented gate is
+# the PATH form: one file, reachable from every repo, with one test suite behind
+# it. internal-speckit-template carries its own copy at the same path because a
+# bootstrapped repo has to work before anything is installed, and its skills call
+# the relative form. Keep the two byte-identical — a divergence means one of them
+# has an unfixed round of the history above.
 # Exit:   0 no untracked files in this worktree at the moment it ran
 #         2 untracked files present, or the worktree could not be inspected
 #
