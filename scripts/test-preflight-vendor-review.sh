@@ -208,18 +208,32 @@ f_missing_dir() {
 case_run "a path that does not exist fails CLOSED" 2 "cannot enter" f_missing_dir
 
 # ---------------------------------------------------------------------------
-# Round 9: git's own location variables must not outrank the `cd`.
+# Rounds 9 and 10: git's own location variables.
 #
-# `case_run` cannot express this one, because the defect is in the ENVIRONMENT
-# rather than in the tree — so it gets its own runner. The setup is two repos, one
+# `case_run` cannot express these, because the defect is in the ENVIRONMENT rather
+# than in the tree — so they get their own runner. The setup is two repos, one
 # dirty and holding an unscanned untracked file, one clean, and the script is
 # pointed at the DIRTY one while `GIT_DIR`/`GIT_WORK_TREE` point at the clean one.
 #
-# Before the `unset`, that combination exited 0 and printed
-# `clean worktree in .../dirty` — naming the dirty path, because `pwd` was honest
-# and `git` was reading somewhere else. That is worse than an error: a confident
-# answer about the wrong subject. It is also not exotic, since git exports these
-# to every hook it runs.
+# Round 9: that combination exited 0 and printed `clean worktree in .../dirty` —
+# naming the dirty path, because `pwd` was honest and `git` was reading somewhere
+# else. A confident answer about the wrong subject, and not exotic either, since
+# git exports these to every hook it runs. Round 9 unset them.
+#
+# Round 10: unsetting them is not enough, and these cases assert the STRONGER
+# behaviour that replaced it. The gate is an `&&` chain, so `review-plan-v2` and
+# `coderabbit review` run in the caller's shell and inherit the variables anyway
+# — the send can enumerate a repository this script never looked at. A child
+# cannot unset a variable in its parent, so the script now REFUSES while any of
+# the four is set, whatever the tree looks like.
+#
+# Which means the assertion below flipped: a CLEAN tree with `GIT_DIR` exported
+# used to be required to exit 0 (proof the unset was a narrowing of trust rather
+# than a blanket refusal) and is now required to exit 2. A reader who trusts the
+# old label will read the new behaviour as a regression, so it is spelled out.
+# The proof that this is not a blanket refusal now rests where it belongs: the
+# clean-worktree case at the top of this file runs with no such variable set and
+# must still pass.
 # ---------------------------------------------------------------------------
 
 GITENV_DIRTY="$TMP/gitenv-dirty"
@@ -255,26 +269,46 @@ check() {  # check <label> <got-exit> <want-exit> <output> <must-contain-or-empt
 run_with_env "$GITENV_DIRTY" \
   "GIT_DIR=$GITENV_CLEAN/.git" "GIT_WORK_TREE=$GITENV_CLEAN"
 check "an exported GIT_DIR/GIT_WORK_TREE cannot redirect the inspection" \
-  "$env_status" 2 "$env_out" "1 uncommitted change(s)"
-check "and the refusal still names the file in the tree it was pointed at" \
-  "$env_status" 2 "$env_out" "leaked.txt"
+  "$env_status" 2 "$env_out" "git location variable(s) set"
+check "and the refusal names the variables rather than only refusing" \
+  "$env_status" 2 "$env_out" "GIT_DIR GIT_WORK_TREE"
 
-# GIT_INDEX_FILE redefines what "staged" means, so an empty one hides a staged
-# change from `--porcelain`. Same class, one step in.
+# One case per variable, each set ALONE, because the refusal is a loop and a loop
+# is where an off-by-one lives. `GIT_COMMON_DIR` had no case at all until round 10
+# while the docs implied all four were covered — CodeRabbit caught the claim, not
+# a bug, and the answer to an overclaimed test is a test rather than softer wording.
+for v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR; do
+  run_with_env "$GITENV_CLEAN" "$v=$GITENV_DIRTY/.git"
+  check "$v alone is refused, on a CLEAN tree, naming itself" \
+    "$env_status" 2 "$env_out" "$v"
+done
+
+# `GIT_INDEX_FILE` gets one more case, because the round-9 version of it was
+# VACUOUS in a way worth recording. It passed an EMPTY index file, and an empty
+# index is not a redefinition of "staged" — it is a broken file: measured
+# 2026-08-31, `GIT_INDEX_FILE=/tmp/empty git status --porcelain` exits **128**
+# with `index file smaller than expected`. So the old case was satisfied by the
+# fail-closed path for unreadable repositories and proved nothing about the
+# variable. With a VALID alternate index built from `HEAD`, `git status` exits 0
+# and reports ` M tracked.txt` instead of `M  tracked.txt` — the staged-ness is
+# hidden, the change is not, because `--porcelain -uall` compares the worktree to
+# HEAD as well. CodeRabbit caught it; the round-10 refusal makes the distinction
+# moot, and this case pins the valid-index form so it stays moot.
 GITENV_STAGED="$TMP/gitenv-staged"
 new_repo "$GITENV_STAGED"
 echo "SECRET=live" > "$GITENV_STAGED/tracked.txt"
 git -C "$GITENV_STAGED" add tracked.txt
-: > "$TMP/empty-index"
-run_with_env "$GITENV_STAGED" "GIT_INDEX_FILE=$TMP/empty-index"
-check "an exported GIT_INDEX_FILE cannot hide a staged change" \
-  "$env_status" 2 "$env_out" "1 uncommitted change(s)"
+GIT_INDEX_FILE="$TMP/alt-index" git -C "$GITENV_STAGED" read-tree HEAD
+run_with_env "$GITENV_STAGED" "GIT_INDEX_FILE=$TMP/alt-index"
+check "a VALID alternate GIT_INDEX_FILE is refused too (not via the 128 path)" \
+  "$env_status" 2 "$env_out" "GIT_INDEX_FILE"
 
-# The unset must not break the ordinary case: a clean tree with these exported
-# still passes, so the fix is a narrowing of trust and not a blanket refusal.
-run_with_env "$GITENV_CLEAN" \
-  "GIT_DIR=$GITENV_DIRTY/.git" "GIT_WORK_TREE=$GITENV_DIRTY"
-check "a clean tree still passes with the variables exported (no blanket refusal)" \
+# Anti-vacuity for the four cases above: the refusal has to come from the
+# ENVIRONMENT, not from the tree. Same fixture, same clean tree, nothing exported
+# — it must pass. Without this, a script that refused everything would score four
+# green cases and read as proof.
+run_with_env "$GITENV_CLEAN"
+check "fixture discriminates: the same clean tree passes with nothing exported" \
   "$env_status" 0 "$env_out" "clean worktree"
 
 # ---------------------------------------------------------------------------

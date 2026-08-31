@@ -73,15 +73,18 @@
 # lesson stopped being about any individual fix: a shell guard living in a
 # Markdown paragraph has no mechanism to be wrong out loud. This file has one —
 # scripts/test-preflight-vendor-review.sh, which hands it a dirty worktree, an
-# edited tracked file, a non-repository, a broken helper, an exported GIT_DIR,
-# and 20,000 untracked files, and fails if any of them passes.
+# edited tracked file, a non-repository, a broken helper, each of git's four
+# location variables one at a time, and 20,000 untracked files, and fails if any
+# of them passes.
 #
-# Rounds 8 and 9 came after the move into this file, and neither was a repeat of
-# the seven. Round 8 WIDENED the check (see WHAT IT REJECTS above) and deleted
-# the last command from the decision. Round 9 is the `unset` below: git's own
-# location variables outranked the `cd`, so the script could inspect a different
-# repository than the one it named. Being a script is what let that one be
-# reproduced in ten lines and pinned by a test, rather than argued about.
+# Rounds 8 to 10 came after the move into this file, and none was a repeat of the
+# seven. Round 8 WIDENED the check (see WHAT IT REJECTS above) and deleted the
+# last command from the decision. Round 9 found that git's own location variables
+# outranked the `cd`, so the script could inspect a different repository than the
+# one it named, and unset them. Round 10 found that the unset was not enough —
+# the other legs of the gate run in the caller's shell and inherit those
+# variables anyway — so it became a refusal. Being a script is what let all three
+# be reproduced in ten lines and pinned by tests, rather than argued about.
 #
 # What it does NOT check: files matched by `.gitignore`. The vendor never
 # receives them, so they are not this script's business.
@@ -98,7 +101,8 @@
 # the relative form. Keep the two byte-identical — a divergence means one of them
 # has an unfixed round of the history above.
 # Exit:   0 the worktree held no dirty entry at the moment it ran
-#         2 a dirty entry was present, or the worktree could not be inspected
+#         2 a dirty entry was present, the worktree could not be inspected, or a
+#           git location variable was set in the environment (see round 10)
 #
 # Exit 0 is NOT a verdict that the send is safe. It is one observation, of one
 # worktree, at one instant, and it decays the moment anything writes to the
@@ -160,9 +164,43 @@ unset CDPATH
 # staged change from `--porcelain`. `GIT_COMMON_DIR` likewise redirects the
 # shared metadata a linked worktree resolves through.
 #
-# Unsetting them is not a loss of function: the documented way to point this
-# script at a repository is the REPO_ROOT argument, which still works.
+# ROUND 10 turned that `unset` into a REFUSAL, and the reason is the whole point.
+# Unsetting them fixes this process and nothing else. The documented gate is an
+# `&&` chain, so `review-plan-v2` and `coderabbit review` run in the CALLER's
+# shell with the caller's environment — they still inherit `GIT_DIR` and friends,
+# and the vendor leg can therefore enumerate a different repository than the one
+# this script just inspected. That is the original defect with an extra step in
+# it: a clean answer about a tree the send does not use. A script cannot unset a
+# variable in its parent, so the only honest move is to stop the chain.
+#
+# CodeRabbit raised it on the template's mirror of round 9, one round after
+# raising round 9 itself, which is the same lesson a third time: the fix was
+# correct and left the next hole.
+#
+# Refusing costs nothing legitimate. The documented way to aim this script at a
+# repository is the REPO_ROOT argument. A caller that genuinely needs those
+# variables set for other work runs the gate as
+# `env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR ...`, and
+# a git hook — which git always invokes with them exported — unsets them before
+# calling this, rather than being silently answered about the wrong tree.
+poisoned=""
+for v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR; do
+  [ -n "${!v:-}" ] && poisoned="${poisoned:+$poisoned }$v"
+done
+# Still unset, defence in depth: it covers the set-but-empty case the refusal
+# deliberately ignores, and it keeps everything below this line reading one
+# repository even if the refusal is ever narrowed again.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+if [ -n "$poisoned" ]; then
+  echo "STOP: git location variable(s) set in the environment: $poisoned" >&2
+  echo "      They redirect what \`git\` reads, so this check and the vendor leg" >&2
+  echo "      that follows it can inspect two different repositories. Unsetting" >&2
+  echo "      them here would fix only this process — the rest of the gate runs" >&2
+  echo "      in your shell. Unset them there, or run the whole gate under" >&2
+  echo "      \`env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR\`." >&2
+  echo "      To point this script at a repository, pass it as REPO_ROOT instead." >&2
+  exit 2
+fi
 
 LIST_CAP=20
 

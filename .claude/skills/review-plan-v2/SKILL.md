@@ -30,7 +30,7 @@ scripts/preflight-vendor-review.sh \
 ```
 
 **The guard is a script because seven review rounds proved prose could not hold it,
-and it has taken nine in total.** It lived here, as nine lines of shell in a fenced
+and it has taken ten in total.** It lived here, as nine lines of shell in a fenced
 block, from 2026-08-29 to 2026-08-31. In that window CodeRabbit caught, in order: the
 missing `if` (its clean result is `grep` exiting 1, so the desired outcome looked like
 failure); the fail-open pipeline capture (`if git status | grep '^??'` reports
@@ -53,8 +53,8 @@ reader is free to paste half of it. So the guard is now
 which carries every round in its header, and
 `scripts/test-preflight-vendor-review.sh`, which hands it a dirty worktree, an edited
 tracked file, a directory that is not a repository, a path that does not exist, a
-broken helper, an exported `GIT_DIR`, and 20,000 untracked files, and fails if any of
-them passes. The bulk case asserts its own fixture still discriminates, because the
+broken helper, each of git's four location variables one at a time, and 20,000
+untracked files, and fails if any of them passes. The bulk case asserts its own fixture still discriminates, because the
 retired pipeline form only falls open above a byte threshold — the 64 KiB pipe buffer,
 bisected 2026-08-31 at 61,893 bytes correct versus 70,893 fell open — so the same test
 with a few thousand files would pass against the broken implementation and read as
@@ -81,8 +81,27 @@ an unscanned untracked file, with the variables aimed at a clean one, it printed
 `clean worktree in .../dirty` and exited **0**. Not exotic either — git exports these
 to every hook it runs, so wiring the gate into a pre-push hook would have armed it.
 `GIT_INDEX_FILE` is the same class one step in, since it redefines what "staged"
-means. All four are unset at the top of the script now, with four cases pinning it,
-the fourth checking the fix did not become a blanket refusal.
+means. That round unset all four.
+
+**A tenth round, and it is why the script refuses rather than unsetting.** Unsetting
+fixes one process and nothing else: the gate is an `&&` chain, so `review-plan-v2` and
+`coderabbit review` run in the caller's shell and inherit `GIT_DIR` and friends
+anyway, and the vendor leg can enumerate a repository the guard never inspected —
+round 9's defect with an extra step in it. A child cannot unset a variable in its
+parent, so the script now exits **2** while any of `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_INDEX_FILE`, or `GIT_COMMON_DIR` is set, names the offenders, and points at
+`env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR` for a caller
+that needs them set for other work, or at the `REPO_ROOT` argument for one that only
+wanted to aim the script somewhere. The same round closed two test defects:
+`GIT_COMMON_DIR` had no case at all while the docs implied all four were covered, and
+the `GIT_INDEX_FILE` case was vacuous because an empty index file is a broken file
+rather than a redefinition of "staged" — measured 2026-08-31, `git status` exits
+**128** with `index file smaller than expected`, so the case passed through the
+fail-closed path for unreadable repositories and proved nothing. There is now one case
+per variable set alone on a clean tree, one with a valid alternate index built by
+`git read-tree HEAD`, and one running the same clean tree with nothing exported that
+must pass, because without it a script refusing everything would score green on all
+four. Suite is 24 cases; seen red at `17 passed, 7 failed` by neutering the refusal.
 
 **Two calls narrow the check-to-send window; they do not close it.** A concurrent
 writer can still land a file between the second call's exit and the moment the vendor
