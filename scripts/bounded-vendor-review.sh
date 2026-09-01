@@ -463,6 +463,32 @@ POLL="${POLL-5}"
 # forever, which is the early kill switched off again (defect 3's shape).
 LOG_DIR="${CR_LOG_DIR-${HOME:+$HOME/.coderabbit/logs}}"
 
+# THE REFUSAL BELOW CANNOT SPEAK FOR THIS CASE, and letting it try was a defect of
+# its own — raised by the PR-side review on 2026-09-01, one round after the HOME
+# hole above was fixed. With CR_LOG_DIR unset and HOME unset or empty, the
+# expansion yields empty and the generic branch prints "CR_LOG_DIR is set but
+# empty. Unset it to take the default" — and BOTH sentences are false: CR_LOG_DIR
+# is not set, and unsetting it changes nothing. The operator who lands here is in
+# cron, a systemd unit, or a git hook, which is precisely where HOME is absent and
+# where there is nobody to guess; they would be handed an instruction that cannot
+# resolve the refusal, with the actual cause unnamed.
+#
+# Advice that cannot resolve its own refusal is part of the defect, not cosmetics
+# on top of one. That is the sibling guard's eleventh round exactly: it told the
+# caller to use `env -u`, which covers one leg of an && chain, so following the
+# guard's advice defeated the guard. Same lesson, this file's turn.
+#
+# `${CR_LOG_DIR+x}` asks whether it is SET, not whether it has content — the same
+# distinction that made defect 12 and the sibling's twelfth round, and the reason
+# `CR_LOG_DIR=` still reaches the generic branch below, where the message is true.
+if [ -z "${CR_LOG_DIR+x}" ] && [ -z "${HOME:-}" ]; then
+  echo "STOP: cannot build a default CR_LOG_DIR, because HOME is unset or empty" >&2
+  echo "      and CR_LOG_DIR was not set either. Set CR_LOG_DIR explicitly, or" >&2
+  echo "      set HOME. This is exit 2 and never exit 1: the CLI spends 1 on real" >&2
+  echo "      findings, so a 1 from here would read as a review that happened." >&2
+  exit 2
+fi
+
 # CR_BIN and LOG_DIR are not numbers, so the numeric loop below cannot speak for
 # them. An empty CR_BIN would reach `command -v ""` and refuse by luck rather
 # than by decision; an empty LOG_DIR would silently root every log path at `/`,

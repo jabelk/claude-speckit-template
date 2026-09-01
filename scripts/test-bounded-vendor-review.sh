@@ -1014,6 +1014,33 @@ for bad in "TOTAL_CAP=abc" "TOTAL_CAP=0" "CONNECT_CAP=-5" \
   fi
 done
 
+# The MIRROR IMAGE of the hole closed in the HOME case below, and it needs its own
+# case for the same reason that one did: both refusals name CR_LOG_DIR, so the loop
+# above cannot tell them apart, and a future fix that routed a genuinely set-but-
+# empty CR_LOG_DIR into the HOME branch would be a lie in the other direction —
+# blaming an absent HOME while HOME is sitting right there, set. The two branches
+# turn on `${CR_LOG_DIR+x}` vs `${CR_LOG_DIR:-}`, i.e. SET vs NON-EMPTY, and that
+# one character is the whole distinction; a suite that greps only the shared token
+# pins neither side of it. HOME is deliberately left INHERITED here, because the
+# environment this case models is the ordinary one.
+out=$(env CR_BIN=true CR_LOG_DIR= bash "$UNDER_TEST" 2>&1); status=$?
+label="CR_LOG_DIR= blames CR_LOG_DIR, not an absent HOME"
+if [ "$status" -ne 2 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2"
+  awk '{ print "       | " $0 }' <<<"$out" | head -3
+elif ! grep -qF "is set but empty" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "did not say CR_LOG_DIR is set but empty"
+  awk '{ print "       | " $0 }' <<<"$out" | head -3
+elif grep -qF "HOME is unset or empty" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "blamed HOME, which is set in this environment"
+  awk '{ print "       | " $0 }' <<<"$out" | head -3
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+fi
+
 # --- DEFECT 12: an ABSENT HOME, which no fixture had ever constructed ---------
 #
 # The default log path was `"${CR_LOG_DIR-$HOME/.coderabbit/logs}"`, and under
@@ -1029,16 +1056,32 @@ done
 # merged harness, a cooperating process, an unlanded boundary, or a shared knob —
 # an environment the harness inherited and therefore never chose.
 #
-# Three assertions, and the second two are what make it a check rather than an
-# exit-code coincidence. `-ne 1` because exit 1 IS the defect, not a symptom of
-# it; no `unbound variable` because that string is the abort itself and its absence
-# is what "the expansion was guarded" means; and the refusal must name CR_LOG_DIR,
-# since an empty log root left unrefused would degrade connect_verdict() to
-# `unknown` forever, which is the early kill switched off (defect 3's shape).
+# Five assertions, and the last two were added on 2026-09-01 after the PR-side
+# review pointed out that THE FIRST THREE PINNED THE WRONG MESSAGE. `-ne 1` because
+# exit 1 IS the defect, not a symptom of it; no `unbound variable` because that
+# string is the abort itself and its absence is what "the expansion was guarded"
+# means; and the refusal must name CR_LOG_DIR, since an empty log root left
+# unrefused would degrade connect_verdict() to `unknown` forever, which is the
+# early kill switched off (defect 3's shape).
+#
+# WHY THAT WAS NOT ENOUGH, and it is the twelfth preflight round's lesson landing in
+# this suite one day after being written down there. With HOME absent the script
+# fell through to the generic empty-value refusal, which says "CR_LOG_DIR is set but
+# empty. Unset it to take the default" — false in both sentences here, and silent
+# about HOME. The substring `CR_LOG_DIR` appears in that wrong message too, so this
+# case scored green on advice that could not resolve its own refusal. Grep for the
+# SENTENCE the check produces, not for a token that appears in the wrong one as
+# readily as the right one.
+#
+# So: the refusal must NAME HOME as the cause, and must NOT contain the phrase that
+# would be a lie in this environment. The second of those is the load-bearing half —
+# a fix that merely appended the word HOME to the old message would satisfy the
+# first and still hand cron's operator an instruction that does nothing.
+#
 # No fake and no `$dir`: `CR_BIN=true` is a real command, so this case must never
 # reach a launch, and giving it a bin directory would only invite one.
 out=$(env -u HOME CR_BIN=true bash "$UNDER_TEST" 2>&1); status=$?
-label="HOME unset -> exit 2 naming CR_LOG_DIR, never exit 1"
+label="HOME unset -> exit 2 blaming HOME, never exit 1"
 if [ "$status" -eq 1 ]; then
   failed=$((failed + 1))
   printf 'FAIL %-56s %s\n' "$label" "exit 1 — the status this script must never use"
@@ -1054,6 +1097,14 @@ elif [ "$status" -ne 2 ]; then
 elif ! grep -qF "CR_LOG_DIR" <<<"$out"; then
   failed=$((failed + 1))
   printf 'FAIL %-56s %s\n' "$label" "exit 2 but did not name CR_LOG_DIR"
+  awk '{ print "       | " $0 }' <<<"$out" | head -3
+elif ! grep -qF "HOME is unset or empty" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "refused without naming HOME as the cause"
+  awk '{ print "       | " $0 }' <<<"$out" | head -3
+elif grep -qF "is set but empty" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "said CR_LOG_DIR is set but empty; it is unset"
   awk '{ print "       | " $0 }' <<<"$out" | head -3
 else
   passed=$((passed + 1)); printf 'ok   %s\n' "$label"
