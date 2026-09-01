@@ -51,7 +51,16 @@ jobs:
       - name: shellcheck the guards and their suites
         if: ${{ !cancelled() }}
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          # The runner image already ships shellcheck. Install only if it does not,
+          # so the ordinary path has no network dependency and an apt mirror having a
+          # bad day cannot fail a step that had everything it needed.
+          # An `if`, not `command -v ... || apt-get update && apt-get install`:
+          # `A || B && C` parses as `(A || B) && C`, so that form installs on EVERY
+          # run, including the one where the binary was already there.
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq shellcheck
+          fi
           shellcheck scripts/preflight-vendor-review.sh \
                      scripts/test-preflight-vendor-review.sh \
                      scripts/bounded-vendor-review.sh \

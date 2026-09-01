@@ -175,14 +175,14 @@ makes the refusal *late*, never absent. Exit **3** means NO REVIEW HAPPENED, and
 deliberately not 1, because `coderabbit` already spends 1 on an unknown flag, on "not a
 git repository", and on "found actionable issues" alike. Override with
 `TOTAL_CAP=1800 scripts/bounded-vendor-review.sh ...` on a large diff.
-`scripts/test-bounded-vendor-review.sh` is its suite, 31 cases, with fakes that
+`scripts/test-bounded-vendor-review.sh` is its suite, 33 cases, with fakes that
 genuinely `sleep 600` — a fake that never hangs removes the only behaviour worth
 guarding.
 
-**Eight defects have been found in that wrapper. Six are every one of them an
+**Ten defects have been found in that wrapper. Seven are every one of them an
 advertised bound — or an advertised verdict — that was not the one advertised; the other
-two are their own classes and are listed anyway, because a tidier pattern would be a
-false one. Not one of the eight was found by reasoning about the code.** They are worth listing because they are the shape this leg
+three are their own classes and are listed anyway, because a tidier pattern would be a
+false one. Not one of the ten was found by reasoning about the code.** They are worth listing because they are the shape this leg
 fails in. (1) The connect kill required *exactly one* new log file, so a second gate
 running concurrently switched it off and the 120s bound silently became the 900s one.
 (2) The wrapper trapped no signals, so killing the wrapper left `coderabbit review`
@@ -214,7 +214,21 @@ KILL pass walked a tree the TERM had already dismantled — child dead, its chil
 reparented to init, `pgrep -P` returning nothing — and a grandchild that ignored SIGTERM
 outlived the wrapper holding the vendor socket. The tree is now captured once, before the
 first signal. Without `setsid` the `-$pid` group kill fails, so that enumerated list is
-the whole mechanism rather than a backstop.
+the whole mechanism rather than a backstop. (9) The first **false refusal** rather than a
+false pass: liveness was tested only at the top of the wait loop, and defect 5's fix
+clamps the nap to end exactly *on* a deadline — so a reviewer that returned during that
+final nap met `SECONDS >= TOTAL_CAP` on wake and was reported as a cap kill, `NO VENDOR
+REVIEW HAPPENED` printed over a review that happened with its exit status discarded. No
+case touched it because the window is one nap wide and every other fixture either hangs
+well past the cap or returns well inside one. Fix is one `kill -0`, a builtin and the
+same test the loop already runs as its `while` condition. **Never decide on a clock you
+read before the sleep.** (10) Its own class, and the seventh defect's own rule violated
+one layer in: the CLI was launched `>"$out" 2>&1` and `$out` replayed on stdout, so a
+diagnostic the vendor wrote to **stderr** came back on the NDJSON stream this skill's
+`--agent` invocation makes machine-readable. Two temp files now — reviewer stdout to
+stdout, reviewer stderr to stderr — with `connect_verdict` reading **both**, because
+which stream carries the progress lines has only ever been measured merged, and assuming
+stdout would recreate defect 4 exactly.
 
 Two things from that history generalise past this wrapper. **An exit 3 dated before
 2026-09-01 may have been a false refusal** — defect 4 killed healthy reviews at
@@ -238,6 +252,21 @@ script. A double that *cooperates* with the mechanism under test removes the con
 surely as one that invents a signal. Write the fixture that refuses the first signal, or
 the escalation is untested by construction — the companion fixture that does `trap ''
 TERM` is red at `30 passed, 1 failed` against the re-enumerating version.
+
+Defects 9 and 10 are the fifth and sixth angles, and 10 is the one worth wincing at.
+Defect 9's blindness is a **boundary no fixture landed on**: every case either hung well
+past a cap or returned well inside a nap, so the one-nap-wide window where the two meet
+was untested by omission rather than by a bad double. Write the case that lands *on* the
+bound, not only the one that runs past it. Defect 10 is `case_run`'s `2>&1` **a second
+time**, three paragraphs after this document first named it — the case added for defect 7
+pins where the wrapper's own prose goes and says nothing about the reviewer's two
+streams, which is a near-miss that reads as coverage. So the question is not asked once:
+when a harness merges two streams, ask again one layer in, because the answer changes.
+Six of the ten defects had a test that should have caught them and could not, and in
+every one of the six the vacuity was in the fixture or the harness and never in the
+assertion. **The list is not converging on zero — two of the ten were found by reviewers
+reading the file after the other eight had been fixed and written up, both in code those
+write-ups had just finished explaining. Treat "ten" as the number found so far.**
 
 **Exit 3 is not a failure you retry until it passes, and it is not a clean gate.** The
 PR-side CodeRabbit review is a different path — GitHub to vendor, server-side, never

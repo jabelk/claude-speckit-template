@@ -99,13 +99,18 @@
 #   describes is how the next reader reproduces the bug.
 #
 # THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because
-# each is a way this file's own claims were false. Eight of them. Six are the same
+# each is a way this file's own claims were false. Ten of them. Seven are the same
 # defect — AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE
-# ADVERTISED — and the other two are their own classes, listed anyway because
-# dropping them would make the pattern look tidier than it is. Not one of the eight
-# was found by the author reasoning about the code. Four of the eight had a test
-# that should have caught them and could not, and in every one of those four the
-# vacuity was in the FIXTURE rather than the assertion.
+# ADVERTISED — and the other three are their own classes, listed anyway because
+# dropping them would make the pattern look tidier than it is. Not one of the ten was
+# found by the author reasoning about the code. Six of the ten had a test that should
+# have caught them and could not, and in every one of those six the vacuity was in
+# the FIXTURE OR THE HARNESS rather than the assertion.
+#
+# Two of the ten (9 and 10) were found only AFTER the other eight were fixed and
+# written up, by reviewers reading the fixed file. The list is not converging on
+# zero, and pretending otherwise in this header would be the same category of false
+# claim as the defects themselves.
 #
 #   1. THE EARLY KILL WAS DEAD WHENEVER A SECOND CLI SESSION WAS RUNNING. The
 #      original `this_log()` demanded EXACTLY one log file new since launch and
@@ -284,6 +289,41 @@
 #      review on 2026-09-01, which named the fixture as the reason the suite was
 #      blind to it and was right.
 #
+#   9. IT CALLED A COMPLETED REVIEW A CAP KILL — the first FALSE REFUSAL in the list
+#      rather than a false pass. Liveness was tested only at the top of the wait
+#      loop, and the nap inside it is clamped (defect 5's fix) to end exactly ON a
+#      deadline. So a reviewer that RETURNED during that final nap met
+#      `SECONDS >= TOTAL_CAP` on wake, and the loop set `killed_reason="total"`,
+#      threw the reviewer's own exit status away, and printed NO VENDOR REVIEW
+#      HAPPENED over a review that happened. Seventh instance of an advertised
+#      verdict that was not the one advertised, running in the other direction.
+#
+#      The window is one nap wide, which is exactly why no case touched it: every
+#      other fixture either hangs well past the cap or returns well inside a nap. A
+#      boundary needs a fixture that lands ON it, and
+#      `fake_finishes_during_the_final_nap` under `TOTAL_CAP=3 POLL=5` is that in the
+#      smallest form there is. Fix is one `kill -0` — a builtin, and the same test the
+#      loop already runs as its `while` condition, so it adds no trust assumption.
+#      Red at `31 passed, 1 failed` without it, on that case and no other.
+#
+#  10. IT REPLAYED THE REVIEWER'S STDERR ON STDOUT. The CLI was launched with
+#      `>"$out" 2>&1` and `$out` was then `cat` to this script's stdout, so any
+#      diagnostic the vendor wrote to stderr came back as a line on the stream a
+#      `--agent` consumer parses as NDJSON. Its own class, and a galling one: defect 7
+#      is "stdout belongs to the reviewer, not to this script", fixed by moving this
+#      wrapper's prose to stderr — and the merge one layer in, in the production
+#      launch line, survived that whole round. Now two temp files, reviewer stdout to
+#      stdout and reviewer stderr to stderr, and `connect_verdict` reads BOTH because
+#      which stream carries the progress lines has only ever been measured merged.
+#
+#      THE HARNESS, for the second time and the sixth blind test overall.
+#      `case_run` captures `2>&1`, which is right for what those cases assert and is
+#      precisely what removed this condition — and defect 7's own write-up says so, in
+#      this file, about this harness. The case added for defect 7 pins where THIS
+#      SCRIPT's prose goes and says nothing about the reviewer's two streams, which is
+#      the near-miss that reads as coverage. Red at `32 passed, 1 failed` with the
+#      streams re-merged, on the new case and no other.
+#
 # 120s for the connect is not a guess about how long connecting should take —
 # it is a claim that connecting does not take two minutes. NOT VERIFIED as a
 # normal duration, and stated as a limit rather than glossed: the logs of the 17
@@ -388,10 +428,18 @@ command -v "$CR_BIN" >/dev/null 2>&1 || {
 }
 
 out=$(mktemp) || { echo "STOP: cannot create a temp file; nothing was run." >&2; exit 2; }
+# TWO FILES, because the launch below used `2>&1` into one until 2026-09-01 and
+# `cat "$out"` then replayed the merged stream to our own stdout — defect 10. The
+# skills pass `--agent`, where the CLI's stdout is NDJSON, so any diagnostic the
+# reviewer wrote to stderr came back out as a record the vendor never emitted. That
+# is defect 7's rule ("stdout belongs to the reviewer") one layer in, and it is the
+# merged-streams vacuity from defect 7's own test harness appearing in the
+# PRODUCTION path: `2>&1` destroys the distinction the caller needs.
+err=$(mktemp) || { echo "STOP: cannot create a temp file; nothing was run." >&2; exit 2; }
 # Inline rather than a `cleanup()` function: shellcheck reports SC2329 on a
 # function only ever reached through `trap`, and a disable comment to keep a
 # one-line wrapper is worse than not having the wrapper.
-trap 'rm -f "$out"' EXIT
+trap 'rm -f "$out" "$err"' EXIT
 
 # Every pid from $1 downward, parents before children. `pgrep -P` is the only
 # portable way to walk descendants on both macOS and Linux, and it lives here in
@@ -473,9 +521,9 @@ pre_logs=$(ls -1 "$LOG_DIR" 2>/dev/null || true)
 # Absent on macOS, hence the fallback — the group kill below is attempted either
 # way and its failure is tolerated.
 if command -v setsid >/dev/null 2>&1; then
-  setsid "$CR_BIN" review "$@" >"$out" 2>&1 &
+  setsid "$CR_BIN" review "$@" >"$out" 2>"$err" &
 else
-  "$CR_BIN" review "$@" >"$out" 2>&1 &
+  "$CR_BIN" review "$@" >"$out" 2>"$err" &
 fi
 cr_pid=$!
 
@@ -532,12 +580,22 @@ new_logs() {
 #
 #   connected  a progress line exists and the last one is not the connect phase
 #   stuck      a progress line exists and the last one IS still the connect phase
-#   unknown    no progress line yet, or "$out" unreadable — decline to kill and let
-#              TOTAL_CAP carry the whole bound
+#   unknown    no progress line yet, or neither capture readable — decline to kill
+#              and let TOTAL_CAP carry the whole bound
 #
 # `tr '\r' '\n'` because the CLI redraws its progress in place with carriage
 # returns, so without it the entire progress stream is one unsplittable line and
 # "the last one" is meaningless.
+#
+# IT READS BOTH CAPTURES, and that is deliberate rather than lazy. Splitting stdout
+# from stderr (defect 10) raised a question the merged file never posed: WHICH stream
+# carries the progress lines? Measured only as merged, so the honest answer is
+# unmeasured — and pointing this at stdout alone on the assumption it is stdout would
+# recreate defect 4 exactly, a detector reading a stream that carries nothing,
+# verdict permanently `unknown`, connect kill dead and every findings run refused by
+# the verdict gate. Reading both is correct whichever stream it turns out to be, and
+# costs only that a diagnostic containing the word `elapsed` could be mistaken for a
+# progress line — which lands on `connected`, the safe side.
 #
 # TWO CALLERS as of 2026-09-01. The early kill above, live, mid-run; and the verdict
 # gate at the bottom, once, after the reviewer has returned, to tell a CLI that
@@ -547,8 +605,8 @@ new_logs() {
 # declines to call a failed run a verdict.
 connect_verdict() {
   local last
-  [ -r "$out" ] || { printf 'unknown\n'; return 0; }
-  last=$(tr '\r' '\n' <"$out" 2>/dev/null | grep -F 'elapsed' | tail -n 1)
+  [ -r "$out" ] || [ -r "$err" ] || { printf 'unknown\n'; return 0; }
+  last=$(cat "$out" "$err" 2>/dev/null | tr '\r' '\n' | grep -F 'elapsed' | tail -n 1)
   if [ -z "$last" ]; then
     printf 'unknown\n'
   elif [ "${last#*"$CONNECT_PHASE"}" != "$last" ]; then
@@ -582,6 +640,24 @@ while kill -0 "$cr_pid" 2>/dev/null; do
     if [ "$connect_left" -gt 0 ] && [ "$connect_left" -lt "$nap" ]; then nap="$connect_left"; fi
   fi
   if [ "$nap" -gt 0 ]; then sleep "$nap"; fi
+
+  # ONE LIVENESS RE-TEST BEFORE ANY DECISION. Defect 9, raised by the PR-side review
+  # on 2026-09-01. The nap above is clamped to end exactly ON a deadline, and
+  # liveness was tested only at the top of the loop — so a reviewer that RETURNED
+  # during that final nap was reported as a cap kill: `NO VENDOR REVIEW HAPPENED`
+  # printed over a review that happened, with the reviewer's own status thrown away.
+  # Same family as defects 1-6 — an advertised verdict that was not the one
+  # advertised — running in the other direction, a false refusal rather than a false
+  # pass. Narrow window, wrong report, and this file's whole claim is that when that
+  # sentence prints it is true.
+  #
+  # It costs no external command and no new trust: `kill -0` is a builtin, and it is
+  # the test this loop ALREADY runs as its `while` condition. If it could lie about
+  # death the loop would exit early into this same path anyway. Breaking with no
+  # `killed_reason` hands the outcome to the verdict gate at the bottom, which reads
+  # the reviewer's real status — and `wait` cannot block there, because reaching this
+  # break means the process is already gone.
+  kill -0 "$cr_pid" 2>/dev/null || break
 
   # THE DECISION. Arithmetic only.
   if [ "$SECONDS" -ge "$TOTAL_CAP" ]; then
@@ -617,7 +693,14 @@ cr_status=$?
 
 if [ -n "$killed_reason" ]; then
   echo "--- reviewer output before the kill -------------------------------" >&2
-  tail -n 15 "$out" >&2
+  # BOTH captures, and `tr '\r' '\n'` before the tail. This was `tail -n 15 "$out"`
+  # until 2026-09-01, and on the runs that matter most — a wedged reviewer, whose
+  # entire output is in-place progress redraws — the whole capture is ONE line, so
+  # the tail showed one line while the message below told the operator to read "its
+  # last progress line above". `connect_verdict` had split the returns since defect 4
+  # and the human-facing display had not, which is the same signal made unreadable
+  # for the only reader who cannot work around it.
+  cat "$out" "$err" 2>/dev/null | tr '\r' '\n' | tail -n 15 >&2
   echo "-------------------------------------------------------------------" >&2
   if [ "$killed_reason" = "connect" ]; then
     echo "STOP: the reviewer never got past its connect phase in ${CONNECT_CAP}s." >&2
@@ -649,6 +732,12 @@ fi
 # rather than adopting it keeps the one-code-for-everything problem visible
 # instead of laundering it through this script's exit code.
 cat "$out"
+# Its stderr goes to OUR stderr — same stream it was written on. Not dropped, because
+# a diagnostic the reviewer chose to emit is the operator's; not folded into the line
+# above, because that is the merge defect 10 removed. Reviewer stdout to stdout,
+# reviewer stderr to stderr, wrapper prose to stderr: three sources, two streams, and
+# the one distinction a `--agent` parser depends on kept intact.
+cat "$err" >&2
 # STDOUT BELONGS TO THE REVIEWER, NOT TO THIS SCRIPT. `cat "$out"` above is the
 # CLI's own output and belongs on stdout; every message this wrapper writes goes to
 # stderr, including this blank separator. The skills call this script with `--agent`,
@@ -697,7 +786,7 @@ fi
 # exists, a findings run, and it exits 1 with a full phase sequence.
 if [ "$cr_status" -ne 0 ] && [ "$reviewer_phase" != "connected" ]; then
   echo "STOP: the reviewer exited ${cr_status} without ever reaching a review phase, after ${SECONDS}s." >&2
-  echo "      Its stdout above shows no progress line past '$CONNECT_PHASE', so it" >&2
+  echo "      Its output above shows no progress line past '$CONNECT_PHASE', so it" >&2
   echo "      failed before reviewing rather than reviewing and finding something." >&2
   echo "      The CLI spends exit 1 on an unknown flag and on 'not a git repository'" >&2
   echo "      as well as on findings, so the status alone cannot tell those apart —" >&2

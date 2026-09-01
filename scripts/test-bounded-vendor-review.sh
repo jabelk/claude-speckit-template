@@ -377,6 +377,61 @@ EOF
   chmod +x "$bin/coderabbit"
 }
 
+fake_clean_with_stderr_noise() {
+  local bin="$1"
+  mkdir -p "$bin"
+  cat >"$bin/coderabbit" <<'EOF'
+#!/usr/bin/env bash
+# DEFECT 10. `fake_clean` plus one line on STDERR, which is the whole case. The
+# wrapper launched the CLI with `>"$out" 2>&1` and then replayed `$out` on its own
+# stdout, so a diagnostic the vendor wrote to stderr came back as a line on the
+# NDJSON stream the skills parse under `--agent`.
+#
+# No fixture could see it, for the reason defect 7 already documented and this file
+# then repeated in the production path: `case_run` merges the streams, so a case that
+# runs through it cannot assert which stream anything arrived on. The fixture is not
+# the vacuity this time — the harness is, again.
+mkdir -p "$CR_LOG_DIR"
+echo '{"message":"Establishing WebSocket connection to URL"}' >>"$CR_LOG_DIR/fake-$$.log"
+printf 'Connecting to CodeRabbit... 1s elapsed\r'
+printf 'Summarizing changes... 6s elapsed\r'
+echo
+echo "VENDOR-DIAGNOSTIC-ON-STDERR" >&2
+echo "reviewing 3 of 3 changed file(s)"
+echo "No findings."
+exit 0
+EOF
+  chmod +x "$bin/coderabbit"
+}
+
+fake_finishes_during_the_final_nap() {
+  local bin="$1"
+  mkdir -p "$bin"
+  cat >"$bin/coderabbit" <<'EOF'
+#!/usr/bin/env bash
+# DEFECT 9. A healthy review, identical to `fake_clean` except that it returns
+# INSIDE the wait loop's last nap. Driven by TOTAL_CAP=3 POLL=5: the nap is clamped
+# to `TOTAL_CAP - SECONDS` = 3, this exits at 2, and the loop wakes at exactly the
+# cap. Liveness was tested only at the top of the loop, so the cap branch fired on a
+# reviewer that had already succeeded — `NO VENDOR REVIEW HAPPENED` over a review
+# that happened, and the reviewer's own exit 0 discarded.
+#
+# The window is one nap wide, which is why no existing case touched it: every other
+# fixture either hangs past the cap or returns well inside a nap. A boundary needs a
+# fixture that lands ON it.
+mkdir -p "$CR_LOG_DIR"
+echo '{"message":"Establishing WebSocket connection to URL"}' >>"$CR_LOG_DIR/fake-$$.log"
+printf 'Connecting to CodeRabbit... 1s elapsed\r'
+sleep 2
+printf 'Summarizing changes... 2s elapsed\r'
+echo
+echo "reviewing 3 of 3 changed file(s)"
+echo "No findings."
+exit 0
+EOF
+  chmod +x "$bin/coderabbit"
+}
+
 fake_found_issues() {
   local bin="$1"
   mkdir -p "$bin"
@@ -447,7 +502,11 @@ EOF
 # harness pins `POLL=1`.
 
 case_run() {
-  local label="$1" want_exit="$2" want_text="$3" max_secs="$4" builder="$5"
+  # $6 is an optional substring that must be ABSENT. Only ever meaningful alongside
+  # the exit-status assertion: on its own, "the output does not say X" is satisfied by
+  # a script that died before printing anything, which is the absent-double vacuity
+  # from defect 3 wearing an assertion instead of a fixture.
+  local label="$1" want_exit="$2" want_text="$3" max_secs="$4" builder="$5" reject_text="${6-}"
   local n=$((passed + failed + 1))
   local dir="$TMP/case-$n"
   local bin="$dir/bin" logs="$dir/logs"
@@ -472,6 +531,9 @@ case_run() {
   [ "$status" -eq "$want_exit" ] || why="exit $status, wanted $want_exit"
   if [ -z "$why" ] && [ -n "$want_text" ] && ! grep -qF "$want_text" <<<"$out"; then
     why="output lacked '$want_text'"
+  fi
+  if [ -z "$why" ] && [ -n "$reject_text" ] && grep -qF "$reject_text" <<<"$out"; then
+    why="output contained '$reject_text' and must not have"
   fi
   if [ -z "$why" ] && [ -n "$max_secs" ] && [ "$elapsed" -ge "$max_secs" ]; then
     # Deliberately not "the early kill did not fire", which this said until
@@ -565,6 +627,19 @@ case_run "findings (CLI exit 1) -> this script still exits 0" \
 case_run "findings -> reports the CLI status without adopting it" \
   0 "exit status 1" "" fake_found_issues
 
+# DEFECT 9, and it is the first FALSE REFUSAL in this file rather than a false pass.
+# `TOTAL_CAP=3 POLL=5` makes the first nap end exactly on the cap, and the fake
+# returns 0 one second inside it. The old loop then read `SECONDS >= TOTAL_CAP`
+# without re-testing liveness and called a completed review a cap kill.
+#
+# Three assertions on one run, and the third is the point: exit 0 and the passed-through
+# output prove the reviewer's status survived, and the REJECTED substring is the sentence
+# this whole file is a claim about. Against the pre-fix script this case exits 3 and
+# prints "produced no verdict in 3s" for a review that produced one.
+TOTAL_CAP_OVERRIDE=3 CONNECT_CAP_OVERRIDE=3 POLL_OVERRIDE=5 \
+  case_run "returns during the final nap -> a verdict, not a cap kill" \
+  0 "No findings." "" fake_finishes_during_the_final_nap "NO VENDOR REVIEW HAPPENED"
+
 # --- STDOUT BELONGS TO THE REVIEWER -------------------------------------------
 #
 # Not a `case_run`, and the reason IS the case: `case_run` captures `2>&1`, so every
@@ -578,10 +653,14 @@ case_run "findings -> reports the CLI status without adopting it" \
 # Three assertions, and the middle one is load-bearing. Against the pre-fix script
 # the first and third still pass and only "stdout carries no wrapper prose" goes red,
 # which is the defect stated out loud.
+# The caps are pinned like every `case_run` case rather than left to the wrapper's
+# defaults, where TOTAL_CAP is 900s — the same 900s as `timeout-minutes: 15` on the
+# CI job. A case that ever stopped exiting promptly would be reported as a job
+# timeout with no case output at all, instead of as the failed assertion it is.
 n=$((passed + failed + 1))
 dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_clean "$dir/bin"
-PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" \
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" TOTAL_CAP=12 CONNECT_CAP=4 POLL=1 \
   bash "$UNDER_TEST" --base main >"$dir/stdout" 2>"$dir/stderr"
 status=$?
 label="wrapper prose on stderr, reviewer output on stdout"
@@ -595,6 +674,42 @@ if [ -z "$why" ] && grep -qF "bounded-vendor-review:" "$dir/stdout"; then
 fi
 if [ -z "$why" ] && ! grep -qF "bounded-vendor-review: reviewer returned" "$dir/stderr"; then
   why="stderr did not carry the wrapper's summary"
+fi
+if [ -z "$why" ]; then
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+else
+  failed=$((failed + 1)); printf 'FAIL %s -- %s\n' "$label" "$why"
+fi
+
+# --- DEFECT 10: THE REVIEWER'S OWN TWO STREAMS --------------------------------
+#
+# The case above pins where THIS SCRIPT's prose goes. It says nothing about the
+# reviewer's own stderr, because the wrapper merged that into `$out` with `2>&1` and
+# then replayed `$out` on stdout — so a vendor diagnostic arrived as a record on the
+# NDJSON stream a `--agent` consumer parses. Same distinction, one layer in, and the
+# case that pins the outer layer is exactly the kind of near-miss that reads as
+# coverage.
+#
+# Four assertions. The second is the defect: against `2>&1` the diagnostic appears on
+# stdout and only that one goes red. The third is what stops the fix from being
+# "throw stderr away" — a diagnostic the vendor chose to emit is the operator's.
+n=$((passed + failed + 1))
+dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean_with_stderr_noise "$dir/bin"
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" TOTAL_CAP=12 CONNECT_CAP=4 POLL=1 \
+  bash "$UNDER_TEST" --base main >"$dir/stdout" 2>"$dir/stderr"
+status=$?
+label="reviewer stderr stays off stdout and is not dropped"
+why=""
+[ "$status" -eq 0 ] || why="exit $status, wanted 0"
+if [ -z "$why" ] && ! grep -qF "No findings." "$dir/stdout"; then
+  why="stdout did not carry the reviewer's own stdout"
+fi
+if [ -z "$why" ] && grep -qF "VENDOR-DIAGNOSTIC-ON-STDERR" "$dir/stdout"; then
+  why="the reviewer's STDERR was replayed on stdout, where --agent consumers parse NDJSON"
+fi
+if [ -z "$why" ] && ! grep -qF "VENDOR-DIAGNOSTIC-ON-STDERR" "$dir/stderr"; then
+  why="the reviewer's stderr was dropped entirely — the operator never sees it"
 fi
 if [ -z "$why" ]; then
   passed=$((passed + 1)); printf 'ok   %s\n' "$label"
