@@ -1262,7 +1262,18 @@ total_word=""
   hdr_fail="$n_defects entries is past this check's number-word table — extend it"
 
 # (B) the stated total
-if [ -z "$hdr_fail" ] && ! grep -qiE "(^|[^a-z])$total_word of them\b" <<<"$hdr_flat"; then
+#
+# `([^a-z]|$)` rather than `\b`, matching the `(^|[^a-z])` on the other end. `\b` is a
+# GNU extension: POSIX ERE does not define it, and where it is unsupported it can be
+# read as a literal `b` or as a backspace, either of which makes `... of them.` miss and
+# report a stale total that is not stale. Raised by the PR-side review on 2026-09-01 as
+# a live macOS bug, and that part did NOT reproduce — measured on this machine against
+# BSD grep 2.6.0-FreeBSD (/usr/bin/grep) and ugrep 7.5.0 (the PATH grep), `of them.`
+# matched and `of themx` did not under both, so `\b` was honoured by every grep this
+# suite can actually reach here. So this is portability hardening rather than a fixed
+# defect, adopted because the character class costs nothing, behaves identically on all
+# three greps measured, and needs no assumption about which grep is first on PATH.
+if [ -z "$hdr_fail" ] && ! grep -qiE "(^|[^a-z])$total_word of them([^a-z]|\$)" <<<"$hdr_flat"; then
   hdr_fail="$n_defects entries but no \"$total_word of them\" — the total is stale"
 fi
 
