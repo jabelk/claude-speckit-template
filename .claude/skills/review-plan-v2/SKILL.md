@@ -175,14 +175,14 @@ makes the refusal *late*, never absent. Exit **3** means NO REVIEW HAPPENED, and
 deliberately not 1, because `coderabbit` already spends 1 on an unknown flag, on "not a
 git repository", and on "found actionable issues" alike. Override with
 `TOTAL_CAP=1800 scripts/bounded-vendor-review.sh ...` on a large diff.
-`scripts/test-bounded-vendor-review.sh` is its suite, 30 cases, with fakes that
+`scripts/test-bounded-vendor-review.sh` is its suite, 31 cases, with fakes that
 genuinely `sleep 600` — a fake that never hangs removes the only behaviour worth
 guarding.
 
-**Seven defects have been found in that wrapper. The first six are every one of them an
-advertised bound — or an advertised verdict — that was not the one advertised; the
-seventh is a different class and is listed anyway, because a tidier pattern would be a
-false one. Not one of the seven was found by reasoning about the code.** They are worth listing because they are the shape this leg
+**Eight defects have been found in that wrapper. Six are every one of them an
+advertised bound — or an advertised verdict — that was not the one advertised; the other
+two are their own classes and are listed anyway, because a tidier pattern would be a
+false one. Not one of the eight was found by reasoning about the code.** They are worth listing because they are the shape this leg
 fails in. (1) The connect kill required *exactly one* new log file, so a second gate
 running concurrently switched it off and the 120s bound silently became the 900s one.
 (2) The wrapper trapped no signals, so killing the wrapper left `coderabbit review`
@@ -208,6 +208,13 @@ summary went out on **stdout**, which is the reviewer's stream — and this skil
 the wrapper with `--agent`, where that stream is machine-readable, so a consumer parsing
 the vendor leg read records the vendor never emitted. Every other message was already on
 stderr. Caught by the PR-side review on the promotion branch, before anything parsed it.
+(8) Also not a bound, and it is defect 2 arriving one signal later: `kill_tree`
+enumerated the process tree on every call and both escalation sites call it twice, so the
+KILL pass walked a tree the TERM had already dismantled — child dead, its children
+reparented to init, `pgrep -P` returning nothing — and a grandchild that ignored SIGTERM
+outlived the wrapper holding the vendor socket. The tree is now captured once, before the
+first signal. Without `setsid` the `-$pid` group kill fails, so that enumerated list is
+the whole mechanism rather than a backstop.
 
 Two things from that history generalise past this wrapper. **An exit 3 dated before
 2026-09-01 may have been a false refusal** — defect 4 killed healthy reviews at
@@ -224,6 +231,13 @@ stream anything went to — the merge that is right for every other case is exac
 removed the condition under test. One case now captures the two streams separately and
 is red on exactly one assertion (`29/1`) against the pre-fix script. When a harness
 merges two things, ask whether the difference between them is what you are asserting on.
+Defect 8 is the fourth angle and the simplest to state: the orphan fixture's grandchild
+was `exec sleep 600`, which **dies on TERM**, so the KILL pass was never asked to find
+anything and the one case whose whole job is catching orphans passed against the buggy
+script. A double that *cooperates* with the mechanism under test removes the condition as
+surely as one that invents a signal. Write the fixture that refuses the first signal, or
+the escalation is untested by construction — the companion fixture that does `trap ''
+TERM` is red at `30 passed, 1 failed` against the re-enumerating version.
 
 **Exit 3 is not a failure you retry until it passes, and it is not a clean gate.** The
 PR-side CodeRabbit review is a different path — GitHub to vendor, server-side, never

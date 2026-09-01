@@ -316,6 +316,26 @@ EOF
   chmod +x "$bin/coderabbit"
 }
 
+fake_hang_with_stubborn_grandchild() {
+  local bin="$1"
+  mkdir -p "$bin"
+  cat >"$bin/coderabbit" <<'EOF'
+#!/usr/bin/env bash
+# Same shape as fake_hang_with_grandchild, except the grandchild IGNORES SIGTERM.
+# That one difference is the whole case. Its `exec sleep 600` dies on TERM, so the
+# KILL pass never had to find anything and DEFECT 8 — a KILL that re-enumerated a
+# tree the TERM had already dismantled — sat under a green suite. `trap '' TERM`
+# plus a sleep loop rather than `exec`, because exec discards the trap and would
+# quietly restore the vacuity this fixture exists to remove.
+mkdir -p "$CR_LOG_DIR"
+echo '{"message":"Establishing WebSocket connection to URL"}' >>"$CR_LOG_DIR/fake-$$.log"
+bash -c 'trap "" TERM; echo $$ >"$GRANDCHILD_PIDFILE"; while :; do sleep 1; done' &
+echo $$ >"$CHILD_PIDFILE"
+sleep 600
+EOF
+  chmod +x "$bin/coderabbit"
+}
+
 fake_hang_no_progress() {
   local bin="$1"
   mkdir -p "$bin"
@@ -659,6 +679,62 @@ else
 fi
 
 # Whatever the verdict, do not leak `sleep 600` processes out of the suite.
+for p in $child $grandchild; do kill -KILL "$p" 2>/dev/null || true; done
+
+# --- DEFECT 8: the KILL pass had nothing left to escalate against --------------
+#
+# The case above passes against the buggy script, and that is the point of this
+# one. Its grandchild is `exec sleep 600`, which dies on the TERM, so the KILL pass
+# was never asked to find anything and could re-enumerate a dismantled tree
+# undetected. Here the grandchild IGNORES TERM, which is the only state in which
+# the escalation matters: the child dies, its children are reparented to init,
+# `pgrep -P "$child"` returns nothing, and a KILL that enumerates at call time
+# reaches only the corpse. Raised by the PR-side review on 2026-09-01 — which also
+# named the fixture as the reason the suite could not see it, and was right.
+#
+# Same lesson as defects 3, 4 and 7 from a fourth angle: the double did not invent
+# a signal or merge two streams, it modelled a process that COOPERATES with the
+# thing under test. A fake that dies politely cannot exercise an escalation.
+
+n=$((passed + failed + 1))
+dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_hang_with_stubborn_grandchild "$dir/bin"
+cpid="$dir/child.pid"; gpid="$dir/grandchild.pid"
+
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" \
+  CHILD_PIDFILE="$cpid" GRANDCHILD_PIDFILE="$gpid" \
+  TOTAL_CAP=60 CONNECT_CAP=59 POLL=1 \
+  bash "$UNDER_TEST" --base main >"$dir/out" 2>&1 &
+wrapper=$!
+
+for _ in $(seq 1 30); do
+  [ -s "$cpid" ] && [ -s "$gpid" ] && break
+  sleep 0.5
+done
+child=$(cat "$cpid" 2>/dev/null); grandchild=$(cat "$gpid" 2>/dev/null)
+
+kill -TERM "$wrapper" 2>/dev/null
+wait "$wrapper" 2>/dev/null
+sleep 2
+
+survivors=""
+for p in $child $grandchild; do
+  kill -0 "$p" 2>/dev/null && survivors="${survivors:+$survivors }$p"
+done
+
+label="grandchild that IGNORES TERM -> the KILL pass still reaches it"
+if [ -z "$child" ] || [ -z "$grandchild" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "fixture never recorded both pids"
+elif [ -n "$survivors" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "survived TERM and was never KILLed: $survivors"
+  awk '{ print "       | " $0 }' "$dir/out" | head -10
+else
+  passed=$((passed + 1))
+  printf 'ok   %s\n' "$label"
+fi
+
 for p in $child $grandchild; do kill -KILL "$p" 2>/dev/null || true; done
 
 # --- guard-refusal cases (no fake needed, and must not run one) ---------------

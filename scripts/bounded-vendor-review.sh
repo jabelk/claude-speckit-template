@@ -99,11 +99,13 @@
 #   describes is how the next reader reproduces the bug.
 #
 # THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because
-# each is a way this file's own claims were false. Seven of them, and the first six
-# are all the same defect: AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS
-# NOT THE ONE ADVERTISED. The seventh is a different class and is listed anyway,
-# because dropping it would make the pattern look tidier than it is. Not one of the
-# seven was found by the author reasoning about the code.
+# each is a way this file's own claims were false. Eight of them. Six are the same
+# defect — AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE
+# ADVERTISED — and the other two are their own classes, listed anyway because
+# dropping them would make the pattern look tidier than it is. Not one of the eight
+# was found by the author reasoning about the code. Four of the eight had a test
+# that should have caught them and could not, and in every one of those four the
+# vacuity was in the FIXTURE rather than the assertion.
 #
 #   1. THE EARLY KILL WAS DEAD WHENEVER A SECOND CLI SESSION WAS RUNNING. The
 #      original `this_log()` demanded EXACTLY one log file new since launch and
@@ -263,6 +265,25 @@
 #      The suite now has one case that captures the two streams separately, and it is
 #      red on exactly one assertion against the pre-fix script.
 #
+#   8. THE KILL PASS RE-ENUMERATED A TREE THE TERM HAD ALREADY DISMANTLED, so a
+#      grandchild that ignored SIGTERM was never killed — defect 2's orphan holding
+#      the socket, arriving one signal later. `kill_tree` walked `pgrep -P` on every
+#      call, and both escalation sites called it twice. After the TERM the direct
+#      child is gone and its children belong to init, so the second walk returns
+#      nothing and the KILL reaches only the corpse. The tree is now enumerated once,
+#      before the first signal, and both passes escalate over that same list.
+#
+#      The fixture is again where the vacuity lived, and this is its fourth distinct
+#      shape. `fake_hang_with_grandchild` runs `exec sleep 600`, which DIES ON TERM —
+#      so the KILL pass was never asked to find anything, and the case that exists
+#      specifically to catch orphans passes against the buggy script. Not an invented
+#      signal (4), not an absent double (3), not a merged stream (7): a double that
+#      COOPERATES with the thing under test. A companion fixture whose grandchild
+#      does `trap '' TERM` and loops is red at `30 passed, 1 failed` against the
+#      re-enumerating version, on that one case and no other. Raised by the PR-side
+#      review on 2026-09-01, which named the fixture as the reason the suite was
+#      blind to it and was right.
+#
 # 120s for the connect is not a guess about how long connecting should take —
 # it is a claim that connecting does not take two minutes. NOT VERIFIED as a
 # normal duration, and stated as a limit rather than glossed: the logs of the 17
@@ -389,9 +410,17 @@ descendants() {
 # that fails and the enumerated tree is what actually does the work. Everything
 # is tolerated — an already-dead target is a success for the goal here, which is
 # that nothing survives this script.
+#
+# $3 is a tree captured BEFORE the first signal, and both escalation sites pass
+# one. DEFECT 8: this used to enumerate on every call, so the KILL pass walked a
+# tree that no longer existed. The direct child normally dies on TERM and its own
+# children are reparented to init, `pgrep -P "$pid"` then returns nothing, and the
+# escalation reached only `$pid` — missing precisely the grandchild that ignored
+# TERM, which is defect 2's orphan arriving one signal later. Enumerating once and
+# escalating over the same list is the whole fix.
 kill_tree() {
-  local pid="$1" sig="$2" p tree
-  tree=$(descendants "$pid")
+  local pid="$1" sig="$2" tree="${3-}" p
+  [ -n "$tree" ] || tree=$(descendants "$pid")
   kill "-$sig" "-$pid" 2>/dev/null || true
   for p in $tree; do
     kill "-$sig" "$p" 2>/dev/null || true
@@ -413,9 +442,11 @@ on_signal() {
   local sig="$1"
   trap - INT TERM HUP
   if [ -n "$cr_pid" ]; then
-    kill_tree "$cr_pid" TERM
+    local tree
+    tree=$(descendants "$cr_pid")
+    kill_tree "$cr_pid" TERM "$tree"
     sleep 1
-    kill_tree "$cr_pid" KILL
+    kill_tree "$cr_pid" KILL "$tree"
   fi
   echo >&2
   echo "STOP: bounded-vendor-review took SIG$sig and killed the reviewer with it." >&2
@@ -573,9 +604,12 @@ if [ -n "$killed_reason" ]; then
   # The whole tree, not the pid: without setsid the CLI's children are in this
   # shell's process group, so a bare `kill` on the parent left them alive and
   # holding the socket. That orphan was measured, not theorised — see defect 2.
-  kill_tree "$cr_pid" TERM
+  # Enumerated ONCE, here, because after the TERM there is nothing left to
+  # enumerate: the child is gone and its children belong to init. See defect 8.
+  cr_tree=$(descendants "$cr_pid")
+  kill_tree "$cr_pid" TERM "$cr_tree"
   sleep 2
-  kill_tree "$cr_pid" KILL
+  kill_tree "$cr_pid" KILL "$cr_tree"
 fi
 
 wait "$cr_pid" 2>/dev/null
