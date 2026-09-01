@@ -1141,21 +1141,31 @@ fi
 #   A. the ordinals are contiguous 1..N — a repeated or skipped number is how
 #      "twelve entries" stays true while meaning nothing
 #   B. "<word> of them." names N
-#   C. the same-shape count plus the own-class count sums to N (nine + three)
+#   C. the same-shape count plus the own-class count sums to N (nine + four)
 #   D. every "of the <number>" phrase naming a count of FOUR OR MORE names N
 #
 # The floor of four in D is measured, not guessed. The header's `of the ...`
-# phrases are, right now, three of "of the twelve" and one of "of the two caps"
-# — the second is two rate limiters, not two defects, and no rule short of
-# parsing English separates them. Anything below four is left alone; every
-# defect total this file has ever carried has been well above it.
+# phrases are three naming the defect total and one "of the two caps" — the
+# second is two rate limiters, not two defects, and no rule short of parsing
+# English separates them. Anything below four is left alone; every defect total
+# this file has ever carried has been well above it.
 #
 # What it deliberately does NOT check is the test-hole count, because "defects 3,
-# 4, and 7 through 12" is prose and a parser for it would break more often than
-# the claim it guards. Stated as a limit rather than left as a gap: when defect
-# 13 lands, B and D both go red and name every phrase that needs a human, which
-# is the outcome that matters. A false red here costs one reword; that is the
-# cheap direction, and it is why D flags rather than tries to be clever.
+# 4, and 7 through 13" is prose and a parser for it would break more often than
+# the claim it guards.
+#
+# IT WORKED, AND ON ITS FIRST REAL USE, WHICH IS WHY THIS PARAGRAPH IS PAST TENSE
+# NOW. Defect 13 landed the same day this case was written; adding the entry took
+# the case red with `13 entries but no "thirteen of them" — the total is stale`,
+# before anyone read the diff, and the fix was three summary lines the author had
+# just walked past. One correction to the prediction that used to be written here:
+# it said B and D would BOTH go red, and only B reported. The checks are guarded on
+# `[ -z "$hdr_fail" ]` and so short-circuit on the first stale claim — which is the
+# right behaviour for a message a human acts on, but it means the case names ONE
+# thing per run and a second run is what confirms the rest. Do not read a single
+# green as proof that every claim was checked this round; read it as proof that
+# nothing was stale when the run finished. A false red here costs one reword; that
+# is the cheap direction, and it is why D flags rather than tries to be clever.
 label="header's own counts match its enumeration"
 hdr_fail=""
 hdr_words=(zero one two three four five six seven eight nine ten eleven twelve

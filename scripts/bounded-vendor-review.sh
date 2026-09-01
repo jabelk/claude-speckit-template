@@ -104,14 +104,14 @@
 #   describes is how the next reader reproduces the bug.
 #
 # THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because
-# each is a way this file's own claims were false. Twelve of them. Nine are the same
+# each is a way this file's own claims were false. Thirteen of them. Nine are the same
 # defect — AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE
-# ADVERTISED — and the other three are their own classes, listed anyway because
-# dropping them would make the pattern look tidier than it is. Not one of the twelve
-# was found by the author reasoning about the code. EIGHT of the twelve had a test that
-# should have caught them and could not — defects 3, 4, and 7 through 12 — and in every
-# one of those eight the vacuity was in the FIXTURE, THE HARNESS, OR THE INHERITED
-# ENVIRONMENT rather than the assertion.
+# ADVERTISED — and the other four are their own classes, listed anyway because
+# dropping them would make the pattern look tidier than it is. Not one of the thirteen
+# was found by the author reasoning about the code. NINE of the thirteen had a test that
+# should have caught them and could not — defects 3, 4, and 7 through 13 — and in every
+# one of those nine the vacuity was in the FIXTURE, THE HARNESS, THE INHERITED
+# ENVIRONMENT, or THE ASSERTION'S ANCHOR rather than in the assertion's logic.
 #
 # The count is anchored to those defect IDs rather than asserted on its own, because it
 # has now been wrong in three different places at once: this line said SIX, all five
@@ -120,11 +120,18 @@
 # anchoring it drifts one round after it is written, which is the same reason the
 # suite's launch count now states how to derive itself instead of naming a figure.
 #
-# Four of the twelve (9 through 12) were found only AFTER the other eight were fixed
+# THAT ANCHORING IS NOW A TEST, AND ITS FIRST REAL USE WAS CATCHING THIS PARAGRAPH.
+# `header's own counts match its enumeration` parses the ordinals below and checks the
+# totals above against them. Adding entry 13 turned it red with `13 entries but no
+# "thirteen of them" — the total is stale`, before any human read the diff. That is the
+# whole argument for a mechanical check over a rule in a comment: the rule was already
+# in the comment, two lines up, and it did not stop the number going stale a fourth time.
+#
+# Five of the thirteen (9 through 13) were found only AFTER the other eight were fixed
 # and written up, by reviewers reading the fixed file — 11 was found in the round that
-# fixed 9 and 10, and 12 in the round that fixed 11. The list is not converging on
-# zero, and pretending otherwise in this header would be the same category of false
-# claim as the defects themselves.
+# fixed 9 and 10, 12 in the round that fixed 11, and 13 in the round that fixed 12. The
+# list is not converging on zero, and pretending otherwise in this header would be the
+# same category of false claim as the defects themselves.
 #
 #   1. THE EARLY KILL WAS DEAD WHENEVER A SECOND CLI SESSION WAS RUNNING. The
 #      original `this_log()` demanded EXACTLY one log file new since launch and
@@ -391,6 +398,42 @@
 #      list: HOME is set in every shell anybody runs a test from, so absence of the
 #      variable was never a state any fixture constructed. `env -u HOME` is the whole
 #      case, and it is red at exit 1 against the old form.
+#
+#  13. THE REFUSAL THAT FIXED 12 NAMED THE WRONG VARIABLE AND GAVE ADVICE THAT COULD NOT
+#      WORK. Defect 12's fix made an absent HOME yield an empty LOG_DIR, which reaches
+#      the generic empty-value validator below — correct in status, and the message it
+#      prints is `CR_LOG_DIR is set but empty. Unset it to take the default`. With HOME
+#      absent and CR_LOG_DIR never set, EVERY CLAUSE OF THAT IS FALSE: CR_LOG_DIR is not
+#      set, unsetting it changes nothing, and there is no default to take, because the
+#      thing that would have built one is the variable the message does not mention. The
+#      operator who lands here is in cron, a systemd unit, or a git hook — precisely
+#      where HOME goes missing and precisely where there is nobody to guess.
+#
+#      ITS OWN CLASS, and the reason it is not filed under the nine is that the exit
+#      status was right: 2, refused, no review claimed. What was false was the DIAGNOSIS.
+#      That makes it the sibling guard's eleventh round arriving here — that one told the
+#      caller to use `env -u`, which covers a single leg of an `&&` chain, so following
+#      the guard's advice defeated the guard. Advice that cannot resolve its own refusal
+#      is part of the defect and not cosmetics on top of one. Fixed with an explicit
+#      branch above the generic loop, on `[ -z "${CR_LOG_DIR+x}" ] && [ -z "${HOME:-}" ]`
+#      — `+x` asks SET, not non-empty, which is what leaves a genuinely set-but-empty
+#      CR_LOG_DIR in the generic branch where that message is true.
+#
+#      THERE WAS A CASE, IT WAS MINE, AND IT PINNED THE WRONG MESSAGE — a ninth shape of
+#      blindness, and the only one so far where the vacuity is in the ANCHOR rather than
+#      in a fixture, a harness, or the environment. Defect 12's case asserted exit 2 and
+#      the substring `CR_LOG_DIR`, and the WRONG message contains that substring as
+#      readily as the right one, so it scored green on advice that could not work. Written
+#      one day after the sibling guard's twelfth round said, about nine of its own
+#      assertions: grep for the SENTENCE the check produces, not for a token that appears
+#      in the wrong one too. Knowing the rule was not what caught it; a reviewer was.
+#      The case now also requires the refusal to name HOME and to NOT carry `is set but
+#      empty`, and a companion case pins the mirror image, since both refusals name
+#      CR_LOG_DIR and the generic loop cannot tell them apart. Red one mutation per
+#      assertion: `if false` gives "refused without naming HOME"; keeping the false
+#      sentence while adding HOME gives "it is unset"; routing set-but-empty into the HOME
+#      branch reds both cases at 35/2 while the generic loop's own `CR_LOG_DIR=` case
+#      stays GREEN, which is what makes the new one load-bearing rather than duplicate.
 #
 # 120s for the connect is not a guess about how long connecting should take —
 # it is a claim that connecting does not take two minutes. NOT VERIFIED as a

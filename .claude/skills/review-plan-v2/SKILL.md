@@ -182,10 +182,10 @@ total, and no figure is repeated here because that figure has gone stale twice �
 with fakes that genuinely `sleep 600`, since a fake that never hangs removes the
 only behaviour worth guarding.
 
-**Twelve defects have been found in that wrapper. Nine are every one of them an
+**Thirteen defects have been found in that wrapper. Nine are every one of them an
 advertised bound — or an advertised verdict — that was not the one advertised; the other
-three are their own classes and are listed anyway, because a tidier pattern would be a
-false one. Not one of the twelve was found by reasoning about the code.** They are worth listing because they are the shape this leg
+four are their own classes and are listed anyway, because a tidier pattern would be a
+false one. Not one of the thirteen was found by reasoning about the code.** They are worth listing because they are the shape this leg
 fails in. (1) The connect kill required *exactly one* new log file, so a second gate
 running concurrently switched it off and the 120s bound silently became the 900s one.
 (2) The wrapper trapped no signals, so killing the wrapper left `coderabbit review`
@@ -252,7 +252,16 @@ alike, so a caller reading 1 as "reviewed and flagged something" reads a script 
 reached the reviewer. `HOME` is absent from cron, from systemd units, and from git hooks
 run by some daemons, which is the environment this gate is meant to be wired into.
 `${HOME:+$HOME/...}` yields empty for unset and for empty, both refused with exit 2 by the
-validator already there.
+validator already there. (13) **The fix to defect 12, wrong about its own cause.** Routing
+an absent `HOME` to that validator produced `CR_LOG_DIR is set but empty. Unset it to take
+the default` — and with `HOME` absent and `CR_LOG_DIR` never set, every clause of that is
+false and the variable at fault goes unnamed, in cron or a git hook where there is nobody
+to guess. Its own class, because the status was right (2, refused, no review claimed) and
+the **diagnosis** was false; the sibling guard's eleventh round is the same shape, where
+advice to use `env -u` covered one leg of an `&&` chain and defeated the guard by being
+followed. Fixed with an explicit branch on `[ -z "${CR_LOG_DIR+x}" ] && [ -z "${HOME:-}" ]`,
+`+x` asking *set* so a genuinely set-but-empty `CR_LOG_DIR` stays in the generic branch
+where that message is true.
 
 Two things from that history generalise past this wrapper. **An exit 3 dated before
 2026-09-01 may have been a false refusal** — defect 4 killed healthy reviews at
@@ -300,31 +309,47 @@ therefore never chose.** `HOME` is set in every shell anyone runs a suite from, 
 HOME` is the entire case, and it is red at exit 1 against the old form (`34 passed, 1
 failed`). When a script expands a variable it did not set, ask what happens when it is not
 there, because your own shell will never tell you.
-EIGHT of the twelve defects had a test that should have caught them and could not — defects
-3, 4, and 7 through 12 — and in every one of those eight the vacuity was in the fixture, the
-harness, or the inherited environment and never in the assertion. The count is written
+Defect 13 is the ninth angle and the first where the vacuity is in the **assertion's
+anchor** rather than in a fixture, a harness, or the environment: defect 12's own case
+asserted exit 2 and the substring `CR_LOG_DIR`, which the *wrong* message contains as
+readily as the right one, so it scored green on advice that could not resolve its own
+refusal. It now asserts the sentence — `HOME is unset or empty` present, `is set but empty`
+absent — with a mirror-image case running `CR_LOG_DIR=` in an ordinary shell to prove the
+two refusals are still told apart in the other direction. Grep for the sentence a check
+produces, never for a token the wrong message carries too.
+NINE of the thirteen defects had a test that should have caught them and could not — defects
+3, 4, and 7 through 13 — and in every one of those nine the vacuity was in the fixture, the
+harness, the inherited environment, or the assertion's anchor, never the assertion's logic. The count is written
 against the defect IDs because it was wrong in three places at once for a round: this line
 said SEVEN, the script header said SIX, and defect 12's own entry calls itself the eighth
-shape. A summary number with nothing anchoring it drifts the round after it is written. **The list is not converging on zero — four of the
-twelve were found by reviewers reading the file after the other eight had been fixed and
-written up, the eleventh in the round that fixed the ninth and tenth and the twelfth in the
-round that fixed the eleventh, all of them in code those write-ups had just finished
-explaining. Treat "twelve" as the number found so far.**
+shape. A summary number with nothing anchoring it drifts the round after it is written. **The list is not converging on zero — five of the
+thirteen were found after the other eight had been fixed and written up, the eleventh in the
+round that fixed the ninth and tenth, the twelfth in the round that fixed the eleventh, and
+the thirteenth in the round that fixed the twelfth, all of them in code those write-ups had
+just finished explaining. Treat "thirteen" as the number found so far.**
 
 **Rounds three and four of review on that file found nothing whatsoever except stale summary
 counts, and the remedy is now a test rather than a resolution.** The suite reads the header's
-twelve numbered entries as the only source of truth for how many defects there are, then
-checks the prose against them: contiguous ordinals, the stated total (`Twelve of them.`), the
-nine-plus-three split, and every `of the <number>` phrase naming a count of four or more. The
+numbered entries as the only source of truth for how many defects there are, then
+checks the prose against them: contiguous ordinals, the stated total (`Thirteen of them.`), the
+same-shape-plus-own-class split, and every `of the <number>` phrase naming a count of four or more. The
 floor of four is measured, not guessed — the header's only other such phrase is `of the two
 caps`, which is two rate limiters rather than two defects, and no rule short of parsing
 English separates them. Proved red four ways, one mutation per assertion, each on that case
 and no other. It deliberately does not parse the test-hole claim (`defects 3, 4, and 7
-through 12`), because a parser for that would break more often than the claim it guards; when
-defect 13 lands, the total and the `of the ...` checks both go red and name every phrase a
-human needs to read. A false red costs one reword, which is the cheap direction to be wrong
+through 13`), because a parser for that would break more often than the claim it guards. A
+false red costs one reword, which is the cheap direction to be wrong
 in. **The reason this is a test and not a rule in a doc is that the rule was already in the
 doc**, in the paragraph directly above the number that was wrong.
+
+**It caught something on its first real use, hours later the same day.** Defect 13 landed,
+and adding its entry turned the case red with `13 entries but no "thirteen of them" — the
+total is stale` before anyone read the diff; the fix was three summary lines the author had
+just walked past while writing the case that caught them. One correction to what this section
+used to predict: it said the total and the `of the ...` checks would *both* report, and only
+the total did. The assertions short-circuit on the first stale claim, which is right for a
+message a human acts on but means **one green run proves nothing was stale when it finished,
+not that every claim was examined that round.**
 
 **Exit 3 is not a failure you retry until it passes, and it is not a clean gate.** The
 PR-side CodeRabbit review is a different path — GitHub to vendor, server-side, never
