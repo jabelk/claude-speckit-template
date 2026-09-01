@@ -10,6 +10,17 @@ on:
   pull_request:
   push:
     branches: [main]
+# The hang fixtures `sleep 600` for real, so a superseded run holds a runner for up to
+# the job bound below doing work nobody will read. Cancel the previous run per ref.
+#
+# `cancel-in-progress` is scoped to pull requests rather than set to a bare `true`: on a
+# push to main, cancelling the previous run leaves whatever commit it was verifying with
+# no completed guard run at all, and "the guards passed" then means "a later push
+# cancelled the check". A suite whose whole subject is bounds that quietly stop existing
+# should not adopt one. Superseded PR pushes are where the waste actually is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:

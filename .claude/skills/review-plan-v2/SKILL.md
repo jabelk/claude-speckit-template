@@ -175,14 +175,14 @@ makes the refusal *late*, never absent. Exit **3** means NO REVIEW HAPPENED, and
 deliberately not 1, because `coderabbit` already spends 1 on an unknown flag, on "not a
 git repository", and on "found actionable issues" alike. Override with
 `TOTAL_CAP=1800 scripts/bounded-vendor-review.sh ...` on a large diff.
-`scripts/test-bounded-vendor-review.sh` is its suite, 33 cases, with fakes that
+`scripts/test-bounded-vendor-review.sh` is its suite, 34 cases, with fakes that
 genuinely `sleep 600` — a fake that never hangs removes the only behaviour worth
 guarding.
 
-**Ten defects have been found in that wrapper. Seven are every one of them an
+**Eleven defects have been found in that wrapper. Eight are every one of them an
 advertised bound — or an advertised verdict — that was not the one advertised; the other
 three are their own classes and are listed anyway, because a tidier pattern would be a
-false one. Not one of the ten was found by reasoning about the code.** They are worth listing because they are the shape this leg
+false one. Not one of the eleven was found by reasoning about the code.** They are worth listing because they are the shape this leg
 fails in. (1) The connect kill required *exactly one* new log file, so a second gate
 running concurrently switched it off and the 120s bound silently became the 900s one.
 (2) The wrapper trapped no signals, so killing the wrapper left `coderabbit review`
@@ -228,7 +228,16 @@ diagnostic the vendor wrote to **stderr** came back on the NDJSON stream this sk
 `--agent` invocation makes machine-readable. Two temp files now — reviewer stdout to
 stdout, reviewer stderr to stderr — with `connect_verdict` reading **both**, because
 which stream carries the progress lines has only ever been measured merged, and assuming
-stdout would recreate defect 4 exactly.
+stdout would recreate defect 4 exactly. (11) **Never sleep through a signal.** The wait
+loop's nap was a foreground `sleep "$nap"`, and bash does not run a trap while a
+foreground command is executing — it waits for that command to finish — so the INT/TERM/HUP
+handler added for defect 2 was deferred by up to a whole nap, and the clamp added for
+defect 5 bounds the nap by `TOTAL_CAP` and never by `POLL`. `POLL=900` therefore left a
+killed wrapper's `coderabbit review` alive about fifteen minutes, holding the vendor
+socket over an unsupervised worktree. Measured, not reasoned: a probe trapping TERM around
+a foreground `sleep 10`, TERM at t=1s, printed `TRAP at 10s`; backgrounded and `wait`ed it
+printed `TRAP at 1s`. The nap is backgrounded now, `wait`ed with `|| true` because an
+interrupted `wait` returns 128+signal, and its pid is reaped by the handler.
 
 Two things from that history generalise past this wrapper. **An exit 3 dated before
 2026-09-01 may have been a false refusal** — defect 4 killed healthy reviews at
@@ -262,11 +271,20 @@ time**, three paragraphs after this document first named it — the case added f
 pins where the wrapper's own prose goes and says nothing about the reviewer's two
 streams, which is a near-miss that reads as coverage. So the question is not asked once:
 when a harness merges two streams, ask again one layer in, because the answer changes.
-Six of the ten defects had a test that should have caught them and could not, and in
+Defect 11 is the seventh angle and the plainest: **a tuning parameter every case shared.**
+Both signal cases ran `POLL=1`, where a trap deferred by a nap and one that fires at once
+are a second apart and indistinguishable — so the interval under test was collapsed by the
+suite's own settings, with nothing wrong in any assertion and nothing to notice in any
+fixture. Its case runs `POLL` longer than the whole test timeline and asserts on the
+**clock**, since buggy and fixed print the same message and the same exit 3 and differ
+only in when (`33 passed, 1 failed`, reporting `took 61s to act on TERM`). When every case
+in a suite shares a knob, ask what interval that setting makes invisible.
+Six of the eleven defects had a test that should have caught them and could not, and in
 every one of the six the vacuity was in the fixture or the harness and never in the
-assertion. **The list is not converging on zero — two of the ten were found by reviewers
-reading the file after the other eight had been fixed and written up, both in code those
-write-ups had just finished explaining. Treat "ten" as the number found so far.**
+assertion. **The list is not converging on zero — three of the eleven were found by
+reviewers reading the file after the other eight had been fixed and written up, one of
+those three in the round that fixed the other two, all of them in code those write-ups had
+just finished explaining. Treat "eleven" as the number found so far.**
 
 **Exit 3 is not a failure you retry until it passes, and it is not a clean gate.** The
 PR-side CodeRabbit review is a different path — GitHub to vendor, server-side, never

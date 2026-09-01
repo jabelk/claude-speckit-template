@@ -99,18 +99,18 @@
 #   describes is how the next reader reproduces the bug.
 #
 # THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because
-# each is a way this file's own claims were false. Ten of them. Seven are the same
+# each is a way this file's own claims were false. Eleven of them. Eight are the same
 # defect — AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE
 # ADVERTISED — and the other three are their own classes, listed anyway because
-# dropping them would make the pattern look tidier than it is. Not one of the ten was
-# found by the author reasoning about the code. Six of the ten had a test that should
-# have caught them and could not, and in every one of those six the vacuity was in
-# the FIXTURE OR THE HARNESS rather than the assertion.
+# dropping them would make the pattern look tidier than it is. Not one of the eleven
+# was found by the author reasoning about the code. Six of the eleven had a test that
+# should have caught them and could not, and in every one of those six the vacuity was
+# in the FIXTURE OR THE HARNESS rather than the assertion.
 #
-# Two of the ten (9 and 10) were found only AFTER the other eight were fixed and
-# written up, by reviewers reading the fixed file. The list is not converging on
-# zero, and pretending otherwise in this header would be the same category of false
-# claim as the defects themselves.
+# Three of the eleven (9, 10 and 11) were found only AFTER the other eight were fixed
+# and written up, by reviewers reading the fixed file — and 11 was found in the round
+# that fixed 9 and 10. The list is not converging on zero, and pretending otherwise in
+# this header would be the same category of false claim as the defects themselves.
 #
 #   1. THE EARLY KILL WAS DEAD WHENEVER A SECOND CLI SESSION WAS RUNNING. The
 #      original `this_log()` demanded EXACTLY one log file new since launch and
@@ -324,6 +324,31 @@
 #      the near-miss that reads as coverage. Red at `32 passed, 1 failed` with the
 #      streams re-merged, on the new case and no other.
 #
+#  11. IT SLEPT THROUGH THE SIGNAL THAT WAS SUPPOSED TO KILL THE REVIEWER. The wait
+#      loop's nap was a FOREGROUND `sleep "$nap"`, and bash does not run a trap while a
+#      foreground command is executing — it waits for that command to finish. So
+#      `on_signal` was deferred by up to a whole nap, and the clamp above it bounds the
+#      nap by TOTAL_CAP and never by POLL: `POLL=900` left a killed wrapper's reviewer
+#      alive for about fifteen minutes, holding the vendor socket over an unsupervised
+#      worktree. Defects 2 and 8 from a third direction — a signal that does not reach
+#      the reviewer — and the eighth instance of an advertised bound that was not the
+#      bound, since the traps advertise "killed the reviewer with it" and that sentence
+#      was true up to POLL seconds later than it read.
+#
+#      MEASURED, not read out of the manual, 2026-09-01: a probe trapping TERM around a
+#      foreground `sleep 10`, sent TERM at t=1s, printed `TRAP at 10s`; backgrounded and
+#      `wait`ed, the same probe printed `TRAP at 1s`. `wait` is the interruptible one.
+#      The nap is now backgrounded, `wait`ed with `|| true` (an interrupted `wait`
+#      returns 128+signal, which `set -e` would otherwise treat as a loop-ending error),
+#      and its pid is reaped by `on_signal` — a trap that killed the reviewer and left a
+#      stray `sleep` would be defect 8's orphan in miniature.
+#
+#      NO FIXTURE COULD HAVE CAUGHT IT AS THE SUITE WAS BUILT, which is a seventh shape
+#      of blindness rather than a seventh excuse: every signal case ran at the short
+#      test POLL, where a deferred trap is indistinguishable from a prompt one. The new
+#      case runs `POLL` LONGER THAN THE WHOLE TEST TIMELINE, which is the only
+#      arrangement in which the deferral is visible at all.
+#
 # 120s for the connect is not a guess about how long connecting should take —
 # it is a claim that connecting does not take two minutes. NOT VERIFIED as a
 # normal duration, and stated as a limit rather than glossed: the logs of the 17
@@ -489,6 +514,11 @@ kill_tree() {
 on_signal() {
   local sig="$1"
   trap - INT TERM HUP
+  # Reap the wait loop's nap first. It is a real `sleep` process (defect 11 backgrounded
+  # it so this trap could run at all), and leaving it behind would be defect 8's stray
+  # descendant in miniature. Before the reviewer kill, because the reviewer is what the
+  # operator is waiting on.
+  if [ -n "$nap_pid" ]; then kill "$nap_pid" 2>/dev/null || true; fi
   if [ -n "$cr_pid" ]; then
     local tree
     tree=$(descendants "$cr_pid")
@@ -504,6 +534,7 @@ on_signal() {
   exit 3
 }
 cr_pid=""
+nap_pid=""
 trap 'on_signal INT' INT
 trap 'on_signal TERM' TERM
 trap 'on_signal HUP' HUP
@@ -603,6 +634,15 @@ new_logs() {
 # spends exit 1 on both. Same question either way ("did it get past connecting?"),
 # and the same fail-safe direction: `unknown` declines to kill early and, at the end,
 # declines to call a failed run a verdict.
+# ORDER LIMIT, stated rather than glossed, because the paragraph above named only the
+# direction that is safe. `cat "$out" "$err"` concatenates BY FILE, not by time, so
+# `tail -n 1` prefers an `elapsed` line in $err over a later one in $out. A stderr line
+# carrying both `elapsed` and the connect phase therefore reads as `stuck` on a review
+# that had connected — the UNSAFE direction, a false refusal rather than a late one.
+# Unmeasured, like the rest of this question, and it is the same knot: the only thing
+# that resolves either direction is measuring which stream the progress lines use and
+# then reading that one. Recorded here so the next reader does not take the note above
+# as covering both ways round. Raised by the PR-side review on 2026-09-01.
 connect_verdict() {
   local last
   [ -r "$out" ] || [ -r "$err" ] || { printf 'unknown\n'; return 0; }
@@ -639,7 +679,30 @@ while kill -0 "$cr_pid" 2>/dev/null; do
     connect_left="$((CONNECT_CAP - SECONDS))"
     if [ "$connect_left" -gt 0 ] && [ "$connect_left" -lt "$nap" ]; then nap="$connect_left"; fi
   fi
-  if [ "$nap" -gt 0 ]; then sleep "$nap"; fi
+  # NEVER SLEEP THROUGH A SIGNAL EITHER. Defect 11, raised by the PR-side review on
+  # 2026-09-01, and it is defects 2 and 8 arriving from a third direction: a signal
+  # that does not reach the reviewer. Bash does not run a trap while a FOREGROUND
+  # command is executing — it waits for that command to finish first — so `sleep "$nap"`
+  # deferred `on_signal` by up to a whole nap. The clamp above bounds the nap by
+  # TOTAL_CAP and never by POLL, so `POLL=900` held a killed wrapper's reviewer alive
+  # for about fifteen minutes, sending a worktree to a vendor unsupervised, which is
+  # precisely what the traps exist to prevent.
+  #
+  # MEASURED rather than read out of the manual, 2026-09-01: a probe script trapping
+  # TERM and running `sleep 10` in the foreground, sent TERM at t=1s, printed
+  # `TRAP at 10s`; the same script with the nap backgrounded and `wait`ed printed
+  # `TRAP at 1s`. `wait` is the interruptible one, which is the whole fix.
+  #
+  # `|| true` because `wait` on an interrupted job returns 128+signal, and under
+  # `set -e` that status would abort the loop instead of letting on_signal run. The pid
+  # is published so on_signal can reap the nap; a trap that killed the reviewer and
+  # left a stray `sleep` behind would be a smaller version of defect 8.
+  if [ "$nap" -gt 0 ]; then
+    sleep "$nap" &
+    nap_pid=$!
+    wait "$nap_pid" || true
+    nap_pid=""
+  fi
 
   # ONE LIVENESS RE-TEST BEFORE ANY DECISION. Defect 9, raised by the PR-side review
   # on 2026-09-01. The nap above is clamped to end exactly ON a deadline, and

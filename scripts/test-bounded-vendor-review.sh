@@ -654,9 +654,14 @@ TOTAL_CAP_OVERRIDE=3 CONNECT_CAP_OVERRIDE=3 POLL_OVERRIDE=5 \
 # the first and third still pass and only "stdout carries no wrapper prose" goes red,
 # which is the defect stated out loud.
 # The caps are pinned like every `case_run` case rather than left to the wrapper's
-# defaults, where TOTAL_CAP is 900s — the same 900s as `timeout-minutes: 15` on the
-# CI job. A case that ever stopped exiting promptly would be reported as a job
-# timeout with no case output at all, instead of as the failed assertion it is.
+# defaults, where TOTAL_CAP is 900s and the only other bound is the CI job's own
+# `timeout-minutes`. A case that ever stopped exiting promptly would be reported as a
+# job timeout with no case output at all, instead of as the failed assertion it is.
+# No figure for that bound is quoted here, on purpose: this file is byte-identical
+# across two repos whose jobs set it differently, so any number written into it is
+# drift by construction. The first version said `timeout-minutes: 15` and leaned on it
+# coinciding exactly with the 900s default — by then one of the two repos had moved to
+# 25, and the coincidence the sentence argued from was gone along with the number.
 n=$((passed + failed + 1))
 dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_clean "$dir/bin"
@@ -844,6 +849,70 @@ if [ -z "$child" ] || [ -z "$grandchild" ]; then
 elif [ -n "$survivors" ]; then
   failed=$((failed + 1))
   printf 'FAIL %-56s %s\n' "$label" "survived TERM and was never KILLed: $survivors"
+  awk '{ print "       | " $0 }' "$dir/out" | head -10
+else
+  passed=$((passed + 1))
+  printf 'ok   %s\n' "$label"
+fi
+
+for p in $child $grandchild; do kill -KILL "$p" 2>/dev/null || true; done
+
+# --- DEFECT 11: the trap was correct and could not run for up to POLL seconds ---
+#
+# Both cases above pass against the buggy script, for one reason: they run `POLL=1`,
+# where a trap deferred by a whole nap and a trap that fires at once are one second
+# apart and indistinguishable. Bash does not run a trap while a FOREGROUND command is
+# executing, so `sleep "$nap"` held `on_signal` off, and the clamp bounds the nap by
+# TOTAL_CAP and never by POLL — `POLL=900` meant a killed wrapper's reviewer kept the
+# vendor socket for about fifteen minutes over an unsupervised worktree.
+#
+# So this case does the only thing that makes the deferral visible: `POLL` LONGER THAN
+# THE WHOLE TEST TIMELINE. It asserts on the CLOCK, not just on the outcome — the two
+# scripts produce the same message and the same exit 3, and differ only in when. That
+# is a seventh shape of test blindness to go with the six in the header: not an absent
+# double, an invented signal, a merged harness, a cooperating process, or a boundary no
+# fixture landed on, but a PARAMETER every case happened to share, which collapsed the
+# very interval under test. Raised by the PR-side review on 2026-09-01.
+
+n=$((passed + failed + 1))
+dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_hang_with_grandchild "$dir/bin"
+cpid="$dir/child.pid"; gpid="$dir/grandchild.pid"
+
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" \
+  CHILD_PIDFILE="$cpid" GRANDCHILD_PIDFILE="$gpid" \
+  TOTAL_CAP=120 CONNECT_CAP=119 POLL=60 \
+  bash "$UNDER_TEST" --base main >"$dir/out" 2>&1 &
+wrapper=$!
+
+for _ in $(seq 1 30); do
+  [ -s "$cpid" ] && [ -s "$gpid" ] && break
+  sleep 0.5
+done
+child=$(cat "$cpid" 2>/dev/null); grandchild=$(cat "$gpid" 2>/dev/null)
+
+# The nap is already running by now: the reviewer is launched before the loop, and the
+# first iteration clamps to min(POLL, TOTAL_CAP-SECONDS, CONNECT_CAP-SECONDS) = 60.
+t0=$SECONDS
+kill -TERM "$wrapper" 2>/dev/null
+wait "$wrapper" 2>/dev/null; wstatus=$?
+elapsed=$((SECONDS - t0))
+
+label="POLL longer than the timeline -> TERM is not deferred"
+if [ -z "$child" ] || [ -z "$grandchild" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "fixture never recorded both pids"
+elif [ "$elapsed" -ge 20 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "took ${elapsed}s to act on TERM; the nap swallowed it"
+  awk '{ print "       | " $0 }' "$dir/out" | head -10
+elif [ "$wstatus" -ne 3 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $wstatus, wanted 3"
+  awk '{ print "       | " $0 }' "$dir/out" | head -10
+elif ! grep -qF "NO VENDOR REVIEW HAPPENED" "$dir/out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "acted promptly but did not say no review happened"
   awk '{ print "       | " $0 }' "$dir/out" | head -10
 else
   passed=$((passed + 1))
