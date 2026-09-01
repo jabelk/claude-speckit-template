@@ -167,7 +167,9 @@ hang leaves you no answer at all, and "still running" is indistinguishable from
 Two bounds, and only one of them is the decision. `TOTAL_CAP` (default 900s) is
 wall-clock arithmetic calling no external command, for the same reason the preflight's
 decision is one `[ -n ]`. `CONNECT_CAP` (default 120s) is an early kill that reads
-**the reviewer's own stdout** and asks whether its last progress line still names the
+**the reviewer's own output — both captured streams, deliberately, because which one
+carries the progress lines has only ever been measured merged** — and asks whether its
+last progress line still names the
 connect phase (`Connecting to CodeRabbit... 1m 01s elapsed`) or a later one
 (`Summarizing changes...`, `Writing review comments...`); every way that read can fail
 leaves it declining to kill and deferring to `TOTAL_CAP`, so a broken `CONNECT_CAP`
@@ -175,14 +177,14 @@ makes the refusal *late*, never absent. Exit **3** means NO REVIEW HAPPENED, and
 deliberately not 1, because `coderabbit` already spends 1 on an unknown flag, on "not a
 git repository", and on "found actionable issues" alike. Override with
 `TOTAL_CAP=1800 scripts/bounded-vendor-review.sh ...` on a large diff.
-`scripts/test-bounded-vendor-review.sh` is its suite, 34 cases, with fakes that
+`scripts/test-bounded-vendor-review.sh` is its suite, 35 cases, with fakes that
 genuinely `sleep 600` — a fake that never hangs removes the only behaviour worth
 guarding.
 
-**Eleven defects have been found in that wrapper. Eight are every one of them an
+**Twelve defects have been found in that wrapper. Nine are every one of them an
 advertised bound — or an advertised verdict — that was not the one advertised; the other
 three are their own classes and are listed anyway, because a tidier pattern would be a
-false one. Not one of the eleven was found by reasoning about the code.** They are worth listing because they are the shape this leg
+false one. Not one of the twelve was found by reasoning about the code.** They are worth listing because they are the shape this leg
 fails in. (1) The connect kill required *exactly one* new log file, so a second gate
 running concurrently switched it off and the 120s bound silently became the 900s one.
 (2) The wrapper trapped no signals, so killing the wrapper left `coderabbit review`
@@ -237,7 +239,19 @@ killed wrapper's `coderabbit review` alive about fifteen minutes, holding the ve
 socket over an unsupervised worktree. Measured, not reasoned: a probe trapping TERM around
 a foreground `sleep 10`, TERM at t=1s, printed `TRAP at 10s`; backgrounded and `wait`ed it
 printed `TRAP at 1s`. The nap is backgrounded now, `wait`ed with `|| true` because an
-interrupted `wait` returns 128+signal, and its pid is reaped by the handler.
+interrupted `wait` returns 128+signal, and its pid is reaped by the handler. That `|| true`
+is defensive rather than load-bearing, and the distinction is worth one clause because the
+first write-up got it wrong: the script runs `set -uo pipefail` and deliberately **not**
+`-e`, since the wait loop depends on non-zero statuses from `kill`, `wait` and `grep`.
+(12) **A default that could produce exit 1, the one status the wrapper promises never to
+use.** `LOG_DIR` was `"${CR_LOG_DIR-$HOME/.coderabbit/logs}"`, and under `set -u` an unset
+`HOME` aborts there with `HOME: unbound variable` at exit 1 — and exit 3 exists precisely
+because the CLI spends 1 on findings, on an unknown flag, and on "not a git repository"
+alike, so a caller reading 1 as "reviewed and flagged something" reads a script that never
+reached the reviewer. `HOME` is absent from cron, from systemd units, and from git hooks
+run by some daemons, which is the environment this gate is meant to be wired into.
+`${HOME:+$HOME/...}` yields empty for unset and for empty, both refused with exit 2 by the
+validator already there.
 
 Two things from that history generalise past this wrapper. **An exit 3 dated before
 2026-09-01 may have been a false refusal** — defect 4 killed healthy reviews at
@@ -279,12 +293,19 @@ fixture. Its case runs `POLL` longer than the whole test timeline and asserts on
 **clock**, since buggy and fixed print the same message and the same exit 3 and differ
 only in when (`33 passed, 1 failed`, reporting `took 61s to act on TERM`). When every case
 in a suite shares a knob, ask what interval that setting makes invisible.
-Six of the eleven defects had a test that should have caught them and could not, and in
-every one of the six the vacuity was in the fixture or the harness and never in the
-assertion. **The list is not converging on zero — three of the eleven were found by
-reviewers reading the file after the other eight had been fixed and written up, one of
-those three in the round that fixed the other two, all of them in code those write-ups had
-just finished explaining. Treat "eleven" as the number found so far.**
+Defect 12 is the eighth angle and plainer still: **an environment the harness inherited and
+therefore never chose.** `HOME` is set in every shell anyone runs a suite from, so the
+*absence* of the variable was not a state any fixture had reason to construct — `env -u
+HOME` is the entire case, and it is red at exit 1 against the old form (`34 passed, 1
+failed`). When a script expands a variable it did not set, ask what happens when it is not
+there, because your own shell will never tell you.
+Seven of the twelve defects had a test that should have caught them and could not, and in
+every one of the seven the vacuity was in the fixture, the harness, or the inherited
+environment and never in the assertion. **The list is not converging on zero — four of the
+twelve were found by reviewers reading the file after the other eight had been fixed and
+written up, the eleventh in the round that fixed the ninth and tenth and the twelfth in the
+round that fixed the eleventh, all of them in code those write-ups had just finished
+explaining. Treat "twelve" as the number found so far.**
 
 **Exit 3 is not a failure you retry until it passes, and it is not a clean gate.** The
 PR-side CodeRabbit review is a different path — GitHub to vendor, server-side, never

@@ -154,11 +154,19 @@
 # launch the suite made that day: nine `case_run` fixtures plus the orphan case
 # plus the CONNECT_CAP-above-TOTAL_CAP case (the refusal cases never launch a CLI —
 # they exit at the guard, or name an absent `CR_BIN`). The suite has since gained
-# four `case_run` cases and the stream-separation case, so it makes 16 launches, and
-# the five added after 2026-08-31 were never put in front of the shim. Count the
-# `case_run` calls with `grep -c '\bcase_run "'` rather than `^case_run`: one of them
-# carries a `POLL_OVERRIDE=` prefix, and anchoring at the line start undercounts by
-# one — which it did on 2026-09-01, in the very act of correcting this number.
+# five `case_run` cases and three more hand-rolled launches, so it makes 20: fourteen
+# `case_run` fixtures, two stream-separation launches, three orphan/signal launches,
+# and the CONNECT_CAP-above-TOTAL_CAP case. The nine added after 2026-08-31 were never
+# put in front of the shim.
+#
+# THIS NUMBER HAS NOW BEEN WRONG TWICE IN TWO DAYS, which is the argument for deriving
+# it rather than reading it. Count the `case_run` calls with
+# `grep -c '\bcase_run "'` rather than `^case_run`: one of them carries a
+# `POLL_OVERRIDE=` prefix, and anchoring at the line start undercounts by one — which
+# it did on 2026-09-01, in the very act of correcting this number. Then add the
+# `bash "$UNDER_TEST"` launches that build a fake, which is not all of them: the
+# GIT_DIR and empty-value refusals build one and exit at the guard before it runs, and
+# the HOME case names a real `CR_BIN` on purpose so that nothing is launched at all.
 #
 # The reason that is acceptable rather than a gap: since 2026-08-31 this suite runs
 # in CI on ubuntu-24.04, which has a REAL util-linux `setsid`, so every case
@@ -1005,6 +1013,51 @@ for bad in "TOTAL_CAP=abc" "TOTAL_CAP=0" "CONNECT_CAP=-5" \
     awk '{ print "       | " $0 }' <<<"$out" | head -5
   fi
 done
+
+# --- DEFECT 12: an ABSENT HOME, which no fixture had ever constructed ---------
+#
+# The default log path was `"${CR_LOG_DIR-$HOME/.coderabbit/logs}"`, and under
+# `set -u` an unset HOME aborts the script there with `HOME: unbound variable` at
+# exit 1 — the one status this file promises never to use, because the CLI spends
+# 1 on findings, on an unknown flag, and on "not a git repository" alike. A caller
+# reading 1 as "reviewed and flagged something" reads a script that never launched
+# the reviewer.
+#
+# WHY NO CASE EXISTED, and it is the plainest reason in the suite: HOME is set in
+# every shell anyone runs a test from, so the ABSENCE of the variable was a state
+# no fixture had reason to build. Not an absent double, an invented signal, a
+# merged harness, a cooperating process, an unlanded boundary, or a shared knob —
+# an environment the harness inherited and therefore never chose.
+#
+# Three assertions, and the second two are what make it a check rather than an
+# exit-code coincidence. `-ne 1` because exit 1 IS the defect, not a symptom of
+# it; no `unbound variable` because that string is the abort itself and its absence
+# is what "the expansion was guarded" means; and the refusal must name CR_LOG_DIR,
+# since an empty log root left unrefused would degrade connect_verdict() to
+# `unknown` forever, which is the early kill switched off (defect 3's shape).
+# No fake and no `$dir`: `CR_BIN=true` is a real command, so this case must never
+# reach a launch, and giving it a bin directory would only invite one.
+out=$(env -u HOME CR_BIN=true bash "$UNDER_TEST" 2>&1); status=$?
+label="HOME unset -> exit 2 naming CR_LOG_DIR, never exit 1"
+if [ "$status" -eq 1 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit 1 — the status this script must never use"
+  awk '{ print "       | " $0 }' <<<"$out" | head -3
+elif grep -qF "unbound variable" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "aborted on an unguarded expansion"
+  awk '{ print "       | " $0 }' <<<"$out" | head -3
+elif [ "$status" -ne 2 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2"
+  awk '{ print "       | " $0 }' <<<"$out" | head -3
+elif ! grep -qF "CR_LOG_DIR" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit 2 but did not name CR_LOG_DIR"
+  awk '{ print "       | " $0 }' <<<"$out" | head -3
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+fi
 
 # CONNECT_CAP above TOTAL_CAP is legal but must SAY the early kill is gone. A
 # silent acceptance reads as "bounded on connect" while having no such bound.

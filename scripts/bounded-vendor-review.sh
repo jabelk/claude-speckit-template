@@ -85,7 +85,8 @@
 #   nothing". If everything else in this file breaks, this still fires.
 #
 #   CONNECT_CAP (default 120s) is an EARLY kill, and it reads THE REVIEWER'S OWN
-#   STDOUT to decide — see `connect_verdict`. It asks whether the last progress
+#   OUTPUT to decide — BOTH captured streams, for the reason in 10 below — see
+#   `connect_verdict`. It asks whether the last progress
 #   line still names the connect phase or a later one. That read can fail in every
 #   way a parse can — no progress line yet, an unreadable capture, a renamed
 #   phase — and every one of those failures makes it decline to kill early, which
@@ -94,23 +95,28 @@
 #   asymmetry is the only reason a parse is allowed in this file at all.
 #
 #   THIS PARAGRAPH SAID "reads the CLI's log" until 2026-09-01 and was describing
-#   the defect rather than the design — see 4 below. Kept as a correction rather
+#   the defect rather than the design — see 4 below. It then said "stdout" for one
+#   round after defect 10 split the streams, which was the same class of stale claim
+#   one revision smaller: `connect_verdict` reads both captures deliberately, because
+#   WHICH stream carries the progress lines has only ever been measured merged, and
+#   picking one on an assumption is how defect 4 happened. Kept as a correction rather
 #   than silently reworded, because a design comment that outlives the design it
 #   describes is how the next reader reproduces the bug.
 #
 # THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because
-# each is a way this file's own claims were false. Eleven of them. Eight are the same
+# each is a way this file's own claims were false. Twelve of them. Nine are the same
 # defect — AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE
 # ADVERTISED — and the other three are their own classes, listed anyway because
-# dropping them would make the pattern look tidier than it is. Not one of the eleven
-# was found by the author reasoning about the code. Six of the eleven had a test that
+# dropping them would make the pattern look tidier than it is. Not one of the twelve
+# was found by the author reasoning about the code. Six of the twelve had a test that
 # should have caught them and could not, and in every one of those six the vacuity was
 # in the FIXTURE OR THE HARNESS rather than the assertion.
 #
-# Three of the eleven (9, 10 and 11) were found only AFTER the other eight were fixed
-# and written up, by reviewers reading the fixed file — and 11 was found in the round
-# that fixed 9 and 10. The list is not converging on zero, and pretending otherwise in
-# this header would be the same category of false claim as the defects themselves.
+# Four of the twelve (9 through 12) were found only AFTER the other eight were fixed
+# and written up, by reviewers reading the fixed file — 11 was found in the round that
+# fixed 9 and 10, and 12 in the round that fixed 11. The list is not converging on
+# zero, and pretending otherwise in this header would be the same category of false
+# claim as the defects themselves.
 #
 #   1. THE EARLY KILL WAS DEAD WHENEVER A SECOND CLI SESSION WAS RUNNING. The
 #      original `this_log()` demanded EXACTLY one log file new since launch and
@@ -339,15 +345,44 @@
 #      foreground `sleep 10`, sent TERM at t=1s, printed `TRAP at 10s`; backgrounded and
 #      `wait`ed, the same probe printed `TRAP at 1s`. `wait` is the interruptible one.
 #      The nap is now backgrounded, `wait`ed with `|| true` (an interrupted `wait`
-#      returns 128+signal, which `set -e` would otherwise treat as a loop-ending error),
-#      and its pid is reaped by `on_signal` — a trap that killed the reviewer and left a
-#      stray `sleep` would be defect 8's orphan in miniature.
+#      returns 128+signal; this file runs `set -uo pipefail` and deliberately NOT `-e`,
+#      so that `|| true` is defensive and declarative rather than load-bearing — the
+#      first version of this entry said `-e` would abort the loop, which is not true of
+#      this script and is corrected here rather than reworded away), and its pid is
+#      reaped by `on_signal` — a trap that killed the reviewer and left a stray `sleep`
+#      would be defect 8's orphan in miniature.
 #
 #      NO FIXTURE COULD HAVE CAUGHT IT AS THE SUITE WAS BUILT, which is a seventh shape
 #      of blindness rather than a seventh excuse: every signal case ran at the short
 #      test POLL, where a deferred trap is indistinguishable from a prompt one. The new
 #      case runs `POLL` LONGER THAN THE WHOLE TEST TIMELINE, which is the only
 #      arrangement in which the deferral is visible at all.
+#
+#  12. THE DEFAULT LOG PATH COULD MAKE THIS SCRIPT EXIT 1 — the one status it promises
+#      never to use, produced by the line that builds a default. `LOG_DIR` was
+#      `"${CR_LOG_DIR-$HOME/.coderabbit/logs}"`, and under `set -u` an UNSET HOME aborts
+#      right there with `HOME: unbound variable`. Measured 2026-09-01: `env -u HOME`
+#      against that form gives exactly that, at exit 1. The whole reason exit 3 exists is
+#      that the CLI spends 1 on FINDINGS, on an unknown flag, and on "not a git
+#      repository" alike; a caller reading 1 as "reviewed and flagged something" would be
+#      reading a script that never reached the reviewer. Ninth instance of the advertised
+#      verdict that was not the one advertised, and the second (after 6) to manufacture
+#      the appearance of a review rather than merely delay a refusal.
+#
+#      NOT EXOTIC, which is the part worth arguing rather than asserting: HOME is absent
+#      from cron, from systemd units, and from git hooks run by some daemons, and the gate
+#      documentation this script belongs to suggests wiring it into a pre-push hook — the
+#      same environment that armed defect 9 of the SIBLING guard, since git exports its
+#      location variables to every hook it runs. Fix is `${HOME:+$HOME/...}`, which
+#      yields empty for unset AND for empty, so both reach the validator below and are
+#      refused with exit 2. Empty is the correct answer for both: a log root of `/`
+#      matches nothing, connect_verdict() degrades to `unknown` forever, and the early
+#      kill is switched off again, which is defect 3's shape one layer out.
+#
+#      A test could have caught this one, and the reason none did is the plainest in the
+#      list: HOME is set in every shell anybody runs a test from, so absence of the
+#      variable was never a state any fixture constructed. `env -u HOME` is the whole
+#      case, and it is red at exit 1 against the old form.
 #
 # 120s for the connect is not a guess about how long connecting should take —
 # it is a claim that connecting does not take two minutes. NOT VERIFIED as a
@@ -404,7 +439,21 @@ CR_BIN="${CR_BIN-coderabbit}"
 TOTAL_CAP="${TOTAL_CAP-900}"
 CONNECT_CAP="${CONNECT_CAP-120}"
 POLL="${POLL-5}"
-LOG_DIR="${CR_LOG_DIR-$HOME/.coderabbit/logs}"
+# `${HOME:+...}` rather than a bare `$HOME`, and this one is defect 12 — the one
+# status this file promises never to use, produced by the line that builds a
+# default. Under `set -u` an UNSET HOME aborts the script here with
+# `HOME: unbound variable` and exit 1, and 1 is the CLI's own status for FINDINGS
+# as well as for an unknown flag and for "not a git repository", which is exactly
+# why exit 3 exists. A caller reading 1 as "reviewed and flagged something" would
+# be reading a script that never reached the reviewer. Measured 2026-09-01:
+# `env -u HOME` against the old form gives `HOME: unbound variable`, exit 1.
+# Not exotic — HOME is absent from cron, from systemd units, and from git hooks
+# run by some daemons, and the gate docs suggest wiring this into a pre-push hook.
+# `${HOME:+...}` yields empty for both unset and empty HOME, which reaches the
+# validator immediately below and is refused with exit 2. Empty is the right
+# answer for both: a log root of `/` degrades connect_verdict() to `unknown`
+# forever, which is the early kill switched off again (defect 3's shape).
+LOG_DIR="${CR_LOG_DIR-${HOME:+$HOME/.coderabbit/logs}}"
 
 # CR_BIN and LOG_DIR are not numbers, so the numeric loop below cannot speak for
 # them. An empty CR_BIN would reach `command -v ""` and refuse by luck rather
@@ -577,7 +626,8 @@ new_logs() {
     | awk -v d="$LOG_DIR" 'NF { print d "/" $0 }'
 }
 
-# connected | stuck | unknown, read from THE REVIEWER'S OWN STDOUT.
+# connected | stuck | unknown, read from THE REVIEWER'S OWN OUTPUT — both captures,
+# for the ORDER LIMIT reason stated below rather than by accident.
 #
 # THIS READ THE LOG FILE UNTIL 2026-09-01, AND THAT WAS THE WRONG STREAM. The
 # detector was built from the outage log, which is three entries ending at the
@@ -693,8 +743,15 @@ while kill -0 "$cr_pid" 2>/dev/null; do
   # `TRAP at 10s`; the same script with the nap backgrounded and `wait`ed printed
   # `TRAP at 1s`. `wait` is the interruptible one, which is the whole fix.
   #
-  # `|| true` because `wait` on an interrupted job returns 128+signal, and under
-  # `set -e` that status would abort the loop instead of letting on_signal run. The pid
+  # `|| true` because `wait` on an interrupted job returns 128+signal. THE FIRST
+  # VERSION OF THIS COMMENT SAID that status would abort the loop under `set -e`, and
+  # this script runs `set -uo pipefail` and deliberately NOT `-e` — the wait loop
+  # depends on non-zero statuses from `kill`, `wait` and `grep`, so `-e` would break
+  # it rather than protect it. So `|| true` is defensive against `-e` ever being added
+  # and a statement at the call site that this status is EXPECTED, not the load-bearing
+  # thing the comment claimed. Corrected in place, one round after it was written,
+  # because a comment that gives the wrong reason for correct code is how the next
+  # reader "simplifies" the code away. The pid
   # is published so on_signal can reap the nap; a trap that killed the reviewer and
   # left a stray `sleep` behind would be a smaller version of defect 8.
   if [ "$nap" -gt 0 ]; then
