@@ -104,13 +104,13 @@
 #   describes is how the next reader reproduces the bug.
 #
 # THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because
-# each is a way this file's own claims were false. Thirteen of them. Nine are the same
+# each is a way this file's own claims were false. Fourteen of them. Ten are the same
 # defect — AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE
 # ADVERTISED — and the other four are their own classes, listed anyway because
-# dropping them would make the pattern look tidier than it is. Not one of the thirteen
-# was found by the author reasoning about the code. NINE of the thirteen had a test that
-# should have caught them and could not — defects 3, 4, and 7 through 13 — and in every
-# one of those nine the vacuity was in the FIXTURE, THE HARNESS, THE INHERITED
+# dropping them would make the pattern look tidier than it is. Not one of the fourteen
+# was found by the author reasoning about the code. TEN of the fourteen had a test that
+# should have caught them and could not — defects 3, 4, and 7 through 14 — and in every
+# one of those ten the vacuity was in the FIXTURE, THE HARNESS, THE INHERITED
 # ENVIRONMENT, or THE ASSERTION'S ANCHOR rather than in the assertion's logic.
 #
 # The count is anchored to those defect IDs rather than asserted on its own, because it
@@ -122,16 +122,29 @@
 #
 # THAT ANCHORING IS NOW A TEST, AND ITS FIRST REAL USE WAS CATCHING THIS PARAGRAPH.
 # `header's own counts match its enumeration` parses the ordinals below and checks the
-# totals above against them. Adding entry 13 turned it red with `13 entries but no
-# "thirteen of them" — the total is stale`, before any human read the diff. That is the
+# totals above against them. Adding entry 13 turned it red — 13 entries against a total
+# still written as the previous number — before any human read the diff. That is the
 # whole argument for a mechanical check over a rule in a comment: the rule was already
 # in the comment, two lines up, and it did not stop the number going stale a fourth time.
 #
-# Five of the thirteen (9 through 13) were found only AFTER the other eight were fixed
+# AND THEN THE CHECK ITSELF WAS THE NEXT THING FOUND WRONG, one round later, which is
+# the ugliest and most useful thing in this header. It greped LINE BY LINE for a claim
+# that is a sentence, so a count phrase wrapped across two comment lines was invisible
+# to it — and one was: entry 6 named a total of six, stale since the seventh defect
+# landed, sitting green through every run of the case written to catch exactly that. The
+# fix reads the comment block as one flattened string. A check whose failure is
+# indistinguishable from its success is not a check, and writing a check FOR that
+# failure mode is not the same as being immune to it. One cost of the fix, stated
+# because it shapes this header: the check cannot tell a QUOTATION of a retired count
+# from a live claim, so a stale phrase being retired is described here rather than
+# quoted. Verbatim would be better history and would also be a permanent red.
+#
+# Six of the fourteen (9 through 14) were found only AFTER the other eight were fixed
 # and written up, by reviewers reading the fixed file — 11 was found in the round that
-# fixed 9 and 10, 12 in the round that fixed 11, and 13 in the round that fixed 12. The
-# list is not converging on zero, and pretending otherwise in this header would be the
-# same category of false claim as the defects themselves.
+# fixed 9 and 10, 12 in the round that fixed 11, 13 in the round that fixed 12, and 14
+# in the round that fixed 13. The list is not converging on zero, and pretending
+# otherwise in this header would be the same category of false claim as the defects
+# themselves.
 #
 #   1. THE EARLY KILL WAS DEAD WHENEVER A SECOND CLI SESSION WAS RUNNING. The
 #      original `this_log()` demanded EXACTLY one log file new since launch and
@@ -242,9 +255,13 @@
 #      whichever deadline is nearer — see the wait loop, including why the connect
 #      deadline stops constraining it once passed.
 #
-#   6. A REVIEWER THAT NEVER REVIEWED READ AS A VERDICT. This is the first of the
-#      six that was a genuine SILENT PASS rather than a late refusal, and it took
-#      two of them composed to get there. The reviewer-returned path exited 0
+#   6. A REVIEWER THAT NEVER REVIEWED READ AS A VERDICT. This is the first entry in
+#      this list that was a genuine SILENT PASS rather than a late refusal, and it
+#      took two of them composed to get there. (Until 2026-09-01 this entry named a
+#      total instead — six, which went stale five defects later and was invisible to
+#      the case that checks these numbers, because the phrase wrapped across two
+#      comment lines and that check read the file line by line. A count with no reason
+#      to be a count is a claim that will rot; this is now a claim about the list.) The reviewer-returned path exited 0
 #      unconditionally, on the stated contract that this script's job is only that
 #      a verdict EXISTS and the CLI's status is the caller's to read. But a CLI that
 #      died on a signal, or errored before reviewing anything, also "returns" — and
@@ -434,6 +451,31 @@
 #      sentence while adding HOME gives "it is unset"; routing set-but-empty into the HOME
 #      branch reds both cases at 35/2 while the generic loop's own `CR_LOG_DIR=` case
 #      stays GREEN, which is what makes the new one load-bearing rather than duplicate.
+#
+#  14. A STALE LINE ON STDERR OUTRANKED A LIVE ONE ON STDOUT, AND REFUSED A REVIEW THAT
+#      HAD CONNECTED. `connect_verdict` read `cat "$out" "$err" | tail -n 1`, and `cat`
+#      orders BY FILE rather than by time: a connect-phase `elapsed` line anywhere in
+#      $err beat every later phase line in $out, the verdict was `stuck`, and the early
+#      kill reported the vendor unreachable at CONNECT_CAP. Defect 4's outcome exactly —
+#      healthy reviews killed — reached by a different route, and the FALSE-REFUSAL
+#      direction, which is defect 9's shape.
+#
+#      WHAT MAKES IT WORTH ITS OWN ENTRY IS THAT THE PREVIOUS ROUND KNEW AND FILED IT AS
+#      A LIMIT. The comment above `connect_verdict` named this exact ordering, named the
+#      unsafe direction, and said the only thing that resolves it is measuring which
+#      stream carries the progress lines. That was wrong, and it is a tidier kind of wrong
+#      than a missed bug: reading $out first and falling back to $err is correct whichever
+#      stream carries them, keeps `unknown` when neither does, and needs no measurement at
+#      all. A limit that can be closed with no new evidence was never a limit; it was a
+#      defect with a note on it, and the note made it read as considered.
+#
+#      TENTH TEST HOLE, and it is defect 9's blindness at one remove: a STATE NO FIXTURE
+#      CONSTRUCTED. Every fixture that wrote to stderr wrote one non-progress diagnostic
+#      (defect 10's), and every fixture with progress lines put them all on stdout, so no
+#      case ever made the two streams competing sources of the same signal.
+#      `fake_slow_with_connect_line_on_stderr` is `fake_healthy_but_slow` with one line
+#      moved, and it is red against the merged read with `never got past its connect
+#      phase` — the outage sentence printed over a working review.
 #
 # 120s for the connect is not a guess about how long connecting should take —
 # it is a claim that connecting does not take two minutes. NOT VERIFIED as a
@@ -763,7 +805,9 @@ new_logs() {
 # verdict permanently `unknown`, connect kill dead and every findings run refused by
 # the verdict gate. Reading both is correct whichever stream it turns out to be, and
 # costs only that a diagnostic containing the word `elapsed` could be mistaken for a
-# progress line — which lands on `connected`, the safe side.
+# progress line — which lands on `connected`, the safe side. BOTH, IN ORDER: $out
+# first, $err only if $out has no progress line at all. See defect 14 below for why
+# that ordering is not a preference.
 #
 # TWO CALLERS as of 2026-09-01. The early kill above, live, mid-run; and the verdict
 # gate at the bottom, once, after the reviewer has returned, to tell a CLI that
@@ -771,19 +815,27 @@ new_logs() {
 # spends exit 1 on both. Same question either way ("did it get past connecting?"),
 # and the same fail-safe direction: `unknown` declines to kill early and, at the end,
 # declines to call a failed run a verdict.
-# ORDER LIMIT, stated rather than glossed, because the paragraph above named only the
-# direction that is safe. `cat "$out" "$err"` concatenates BY FILE, not by time, so
-# `tail -n 1` prefers an `elapsed` line in $err over a later one in $out. A stderr line
-# carrying both `elapsed` and the connect phase therefore reads as `stuck` on a review
-# that had connected — the UNSAFE direction, a false refusal rather than a late one.
-# Unmeasured, like the rest of this question, and it is the same knot: the only thing
-# that resolves either direction is measuring which stream the progress lines use and
-# then reading that one. Recorded here so the next reader does not take the note above
-# as covering both ways round. Raised by the PR-side review on 2026-09-01.
+# ORDER, NOT CONCATENATION — defect 14, and the round before it got this wrong twice
+# over. `cat "$out" "$err"` merges BY FILE, not by time, so `tail -n 1` preferred an
+# `elapsed` line in $err over a later one in $out: a stderr line carrying both `elapsed`
+# and the connect phase read as `stuck` on a review that had connected, which is the
+# UNSAFE direction — a false refusal, defect 9's shape. That was recorded here as a
+# STATED LIMIT waiting on a measurement, and the second mistake was believing it needed
+# one. It does not. Reading $out first and falling back to $err only when $out carries no
+# progress line is correct WHICHEVER stream turns out to carry them, keeps `unknown` when
+# neither does, and adds no assumption to replace the one it removes. A limit that can be
+# closed without new evidence is a defect with a note on it. Raised by the PR-side review
+# on 2026-09-01, one round after the same reviewer's note produced the comment above.
+_last_progress_line() {  # last `elapsed` line of one capture, empty if it has none
+  [ -r "$1" ] || return 0
+  tr '\r' '\n' <"$1" 2>/dev/null | grep -F 'elapsed' | tail -n 1
+}
+
 connect_verdict() {
   local last
   [ -r "$out" ] || [ -r "$err" ] || { printf 'unknown\n'; return 0; }
-  last=$(cat "$out" "$err" 2>/dev/null | tr '\r' '\n' | grep -F 'elapsed' | tail -n 1)
+  last=$(_last_progress_line "$out")
+  [ -n "$last" ] || last=$(_last_progress_line "$err")
   if [ -z "$last" ]; then
     printf 'unknown\n'
   elif [ "${last#*"$CONNECT_PHASE"}" != "$last" ]; then

@@ -56,6 +56,61 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/test-bounded-vendor-review.sh
 
+      # This file's own header says Linux is the ONLY place the `setsid` branch is
+      # exercised. True, and it left the OTHER branch running nowhere — which is the
+      # gap this step closes. Added 2026-09-01, raised by the PR-side review.
+      # On ubuntu-24.04 every case takes `setsid`, so the FALLBACK — the one every
+      # macOS run takes, and the one defects 2 and 8 both lived in — was exercised on
+      # a laptop by hand and by nothing else. Those two are the orphan pair: a kill
+      # that reached the child and left the grandchildren holding the vendor socket.
+      # Without `setsid` the CLI is not a process-group leader, so `kill -- -$pid`
+      # fails and the enumerated `pgrep -P` tree walk is the ENTIRE kill mechanism
+      # rather than a backstop. Its suite has to run somewhere that is true.
+      #
+      # ABSENCE CANNOT BE SHIMMED BY PRECEDENCE. The branch predicate is
+      # `command -v setsid`, so a fake `setsid` earlier on PATH leaves it TRUE and this
+      # step would silently repeat the branch above while reporting the one below — the
+      # failure class both guards exist to remove. The only way in is a PATH with no
+      # setsid anywhere on it, hence the symlink farm; the `command -v` check after it
+      # is the load-bearing half, because a farm that quietly kept setsid would report
+      # a pass for a path it never entered. Proven both ways on 2026-09-01 with a fake
+      # setsid ahead of PATH: with the exclusion, exit 0; with the exclusion neutered,
+      # the refusal fires and the step is red.
+      #
+      # Linked by EXECUTABILITY, not by name, because that is what PATH resolution
+      # does. Measured the first time this ran: a 644 `~/.local/bin/env` (a uv
+      # artifact, not a binary) sat earlier on PATH than /usr/bin/env, the farm linked
+      # the name, and 14 cases exited 126. Failing loudly is the safe direction, but
+      # it fails for a reason with nothing to do with setsid.
+      - name: Run the bounded-vendor-review guard suite with no setsid (the macOS path)
+        if: ${{ !cancelled() }}
+        run: |
+          shim="$RUNNER_TEMP/no-setsid-bin"
+          rm -rf "$shim"; mkdir -p "$shim"
+          printf '%s\n' "$PATH" | tr ':' '\n' | while read -r d; do
+            [ -n "$d" ] || continue
+            [ -d "$d" ] || continue
+            for f in "$d"/*; do
+              { [ -f "$f" ] && [ -x "$f" ]; } || continue
+              b=${f##*/}
+              if [ "$b" = setsid ]; then continue; fi
+              [ -e "$shim/$b" ] || ln -s "$f" "$shim/$b" 2>/dev/null || true
+            done
+          done
+          export PATH="$shim"
+          if command -v setsid >/dev/null 2>&1; then
+            echo "SHIM FAILED: setsid still reachable at $(command -v setsid)" >&2
+            echo "this step would repeat the setsid branch and report it as the fallback" >&2
+            exit 1
+          fi
+          # `find`, not `ls | wc -l`, because SC2012 — actionlint runs shellcheck
+          # over every `run:` block here, so this line is linted like a script.
+          # (Do not start that sentence with the linter's own name: a comment
+          # whose first word is that name parses as a DIRECTIVE, which is
+          # SC1072/SC1073 and how this step was red a moment ago.)
+          echo "no setsid on PATH; $(find "$shim" -maxdepth 1 -type l | wc -l) links"
+          bash scripts/test-bounded-vendor-review.sh
+
       # Both scripts are copies kept byte-identical with the source of truth in the
       # workflows repo. Nothing here can verify that (the other repo is private and
       # not checked out), so this only catches a shell error introduced locally.

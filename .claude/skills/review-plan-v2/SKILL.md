@@ -182,10 +182,10 @@ total, and no figure is repeated here because that figure has gone stale twice �
 with fakes that genuinely `sleep 600`, since a fake that never hangs removes the
 only behaviour worth guarding.
 
-**Thirteen defects have been found in that wrapper. Nine are every one of them an
+**Fourteen defects have been found in that wrapper. Ten are every one of them an
 advertised bound — or an advertised verdict — that was not the one advertised; the other
 four are their own classes and are listed anyway, because a tidier pattern would be a
-false one. Not one of the thirteen was found by reasoning about the code.** They are worth listing because they are the shape this leg
+false one. Not one of the fourteen was found by reasoning about the code.** They are worth listing because they are the shape this leg
 fails in. (1) The connect kill required *exactly one* new log file, so a second gate
 running concurrently switched it off and the 120s bound silently became the 900s one.
 (2) The wrapper trapped no signals, so killing the wrapper left `coderabbit review`
@@ -231,7 +231,8 @@ diagnostic the vendor wrote to **stderr** came back on the NDJSON stream this sk
 `--agent` invocation makes machine-readable. Two temp files now — reviewer stdout to
 stdout, reviewer stderr to stderr — with `connect_verdict` reading **both**, because
 which stream carries the progress lines has only ever been measured merged, and assuming
-stdout would recreate defect 4 exactly. (11) **Never sleep through a signal.** The wait
+stdout would recreate defect 4 exactly. *How* it read both was left as a stated limit that
+round, which is defect 14. (11) **Never sleep through a signal.** The wait
 loop's nap was a foreground `sleep "$nap"`, and bash does not run a trap while a
 foreground command is executing — it waits for that command to finish — so the INT/TERM/HUP
 handler added for defect 2 was deferred by up to a whole nap, and the clamp added for
@@ -261,7 +262,19 @@ the **diagnosis** was false; the sibling guard's eleventh round is the same shap
 advice to use `env -u` covered one leg of an `&&` chain and defeated the guard by being
 followed. Fixed with an explicit branch on `[ -z "${CR_LOG_DIR+x}" ] && [ -z "${HOME:-}" ]`,
 `+x` asking *set* so a genuinely set-but-empty `CR_LOG_DIR` stays in the generic branch
-where that message is true.
+where that message is true. (14) **A stale line on stderr outranked a live one on stdout,
+and the wrapper refused a review that had connected.** `connect_verdict` read the two
+captures defect 10 had just split with `cat "$out" "$err" | tr '\r' '\n' | grep -F elapsed
+| tail -n 1`, and **`cat` orders by file, not by time** — so one connect-phase `elapsed`
+line anywhere in `$err` came after every later-phase line in `$out`, the verdict was
+`stuck`, the early kill fired, and `never got past its connect phase` printed over a
+working review. Defect 4's outcome by a different route, in defect 9's false-refusal
+direction. The aggravating half is that the round which split the streams **knew** about
+the ordering and filed it as a stated limit pending a measurement of which stream carries
+progress lines — and no measurement was ever needed: `$out` first with `$err` only as a
+fallback is correct whichever stream carries them, and still degrades to `unknown` when
+neither does. **A limit that can be closed with no new evidence was never a limit; it was a
+defect with a note on it, and the note made it read as considered.**
 
 Two things from that history generalise past this wrapper. **An exit 3 dated before
 2026-09-01 may have been a false refusal** — defect 4 killed healthy reviews at
@@ -317,27 +330,37 @@ refusal. It now asserts the sentence — `HOME is unset or empty` present, `is s
 absent — with a mirror-image case running `CR_LOG_DIR=` in an ordinary shell to prove the
 two refusals are still told apart in the other direction. Grep for the sentence a check
 produces, never for a token the wrong message carries too.
-NINE of the thirteen defects had a test that should have caught them and could not — defects
-3, 4, and 7 through 13 — and in every one of those nine the vacuity was in the fixture, the
+Defect 14 is the tenth angle and it is **a state no fixture constructed**: every fixture
+that wrote to stderr wrote one non-progress diagnostic there, and every fixture with
+progress lines put all of them on stdout, so the two streams were never competing sources
+of the *same* signal — the condition the ordering bug needs. Not an absent double, an
+invented signal, a merged harness, a cooperating process, an unlanded boundary, a shared
+knob, an inherited environment, or a bad anchor: a *combination* of inputs no case had
+reason to build. Its fixture is `fake_healthy_but_slow` with one line moved to stderr, red
+at `37 passed, 1 failed` on that case and no other. When a fix reads two sources of one
+signal, write the case where both of them speak.
+TEN of the fourteen defects had a test that should have caught them and could not — defects
+3, 4, and 7 through 14 — and in every one of those ten the vacuity was in the fixture, the
 harness, the inherited environment, or the assertion's anchor, never the assertion's logic. The count is written
 against the defect IDs because it was wrong in three places at once for a round: this line
 said SEVEN, the script header said SIX, and defect 12's own entry calls itself the eighth
-shape. A summary number with nothing anchoring it drifts the round after it is written. **The list is not converging on zero — five of the
-thirteen were found after the other eight had been fixed and written up, the eleventh in the
-round that fixed the ninth and tenth, the twelfth in the round that fixed the eleventh, and
-the thirteenth in the round that fixed the twelfth, all of them in code those write-ups had
-just finished explaining. Treat "thirteen" as the number found so far.**
+shape. A summary number with nothing anchoring it drifts the round after it is written. **The list is not converging on zero — six of the
+fourteen were found after the other eight had been fixed and written up, the eleventh in the
+round that fixed the ninth and tenth, the twelfth in the round that fixed the eleventh, the
+thirteenth in the round that fixed the twelfth, and the fourteenth in the round that fixed
+the thirteenth, all of them in code those write-ups had
+just finished explaining. Treat "fourteen" as the number found so far.**
 
 **Rounds three and four of review on that file found nothing whatsoever except stale summary
 counts, and the remedy is now a test rather than a resolution.** The suite reads the header's
 numbered entries as the only source of truth for how many defects there are, then
-checks the prose against them: contiguous ordinals, the stated total (`Thirteen of them.`), the
+checks the prose against them: contiguous ordinals, the stated total (`Fourteen of them.`), the
 same-shape-plus-own-class split, and every `of the <number>` phrase naming a count of four or more. The
 floor of four is measured, not guessed — the header's only other such phrase is `of the two
 caps`, which is two rate limiters rather than two defects, and no rule short of parsing
 English separates them. Proved red four ways, one mutation per assertion, each on that case
 and no other. It deliberately does not parse the test-hole claim (`defects 3, 4, and 7
-through 13`), because a parser for that would break more often than the claim it guards. A
+through 14`), because a parser for that would break more often than the claim it guards. A
 false red costs one reword, which is the cheap direction to be wrong
 in. **The reason this is a test and not a rule in a doc is that the rule was already in the
 doc**, in the paragraph directly above the number that was wrong.
@@ -350,6 +373,16 @@ used to predict: it said the total and the `of the ...` checks would *both* repo
 the total did. The assertions short-circuit on the first stale claim, which is right for a
 message a human acts on but means **one green run proves nothing was stale when it finished,
 not that every claim was examined that round.**
+
+**And then the check itself was the next thing found wrong, one round later, by the vendor
+leg.** Three of its four assertions greped the header **line by line** for claims that are
+wrapping sentences, so the only one whose failure is silent could not see `of the` ending
+one comment line and `six` starting the next — a phrase stale since defect 7, green through
+every run of the very case written to catch exactly that. The fix flattens the comment lines
+before matching, and it has a stated cost: a flattened header cannot tell a **quotation** of
+a retired count from a live claim, so a retired phrase has to be described rather than
+quoted. Measured both directions rather than argued — flattened, the wrapped stale phrase is
+red; line-wise, the same phrase sitting in the header scores `38 passed, 0 failed`.
 
 **Exit 3 is not a failure you retry until it passes, and it is not a clean gate.** The
 PR-side CodeRabbit review is a different path — GitHub to vendor, server-side, never

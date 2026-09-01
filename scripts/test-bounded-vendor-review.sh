@@ -361,6 +361,35 @@ EOF
   chmod +x "$bin/coderabbit"
 }
 
+fake_slow_with_connect_line_on_stderr() {
+  local bin="$1"
+  mkdir -p "$bin"
+  cat >"$bin/coderabbit" <<'EOF'
+#!/usr/bin/env bash
+# DEFECT 14, and it is `fake_healthy_but_slow` with ONE LINE MOVED. A review that is
+# connected and working, whose stderr carries an early CONNECT-phase progress line —
+# a plausible thing for a vendor to write there, and the detector merged the two
+# captures with `cat "$out" "$err"`, which orders BY FILE. So the stale connect line
+# in $err outranked the live `Writing review comments` line in $out, the verdict was
+# `stuck`, and the early kill refused a review that had connected. False refusal, the
+# unsafe direction, on a review the previous fixture proves the wrapper can see.
+#
+# Why nothing caught it: every fixture that wrote to stderr at all wrote ONE
+# non-progress diagnostic (defect 10's), and every fixture with progress lines wrote
+# them only to stdout. The two streams were never both plausible sources of the same
+# signal in any single case — a state no fixture had reason to construct rather than
+# a bad double, which is defect 9's blindness at one remove.
+mkdir -p "$CR_LOG_DIR"
+echo '{"message":"Establishing WebSocket connection to URL"}' >>"$CR_LOG_DIR/fake-$$.log"
+printf 'Connecting to CodeRabbit... 1s elapsed\r' >&2
+printf 'Preparing sandbox... 4s elapsed\r'
+printf 'Summarizing changes... 30s elapsed\r'
+printf 'Writing review comments... 1m 01s elapsed - still working\r'
+sleep 600
+EOF
+  chmod +x "$bin/coderabbit"
+}
+
 fake_clean() {
   local bin="$1"
   mkdir -p "$bin"
@@ -587,6 +616,16 @@ case_run "stuck at connect -> says NO VENDOR REVIEW HAPPENED" \
 # it was every real run for as long as the detector read the log.
 case_run "connected but slow -> TOTAL_CAP, not the connect kill" \
   3 "produced no verdict in 12s" "" fake_healthy_but_slow
+
+# DEFECT 14. The same review, with its connect-phase progress line on STDERR and the
+# later phases on stdout. `cat "$out" "$err"` orders by file, so the stale line won and
+# a connected review was refused as stuck. Asserted the same way as the case above —
+# both paths exit 3, so the sentence is the whole discrimination — plus the refusal it
+# must NOT print, because "produced no verdict" and "never got past its connect phase"
+# are the two ways this run can end and only one of them is true of it.
+case_run "connect line on stderr must not outrank a later one on stdout" \
+  3 "produced no verdict in 12s" "" fake_slow_with_connect_line_on_stderr \
+  "never got past its connect phase"
 
 # DEFECT 1, still stuck, still early-killed. Logs are out of the decision now, so
 # the time bound has stopped being about them; what is load-bearing here is the
@@ -1141,7 +1180,7 @@ fi
 #   A. the ordinals are contiguous 1..N — a repeated or skipped number is how
 #      "twelve entries" stays true while meaning nothing
 #   B. "<word> of them." names N
-#   C. the same-shape count plus the own-class count sums to N (nine + four)
+#   C. the same-shape count plus the own-class count sums to N (ten + four)
 #   D. every "of the <number>" phrase naming a count of FOUR OR MORE names N
 #
 # The floor of four in D is measured, not guessed. The header's `of the ...`
@@ -1151,14 +1190,17 @@ fi
 # this file has ever carried has been well above it.
 #
 # What it deliberately does NOT check is the test-hole count, because "defects 3,
-# 4, and 7 through 13" is prose and a parser for it would break more often than
+# 4, and 7 through 14" is prose and a parser for it would break more often than
 # the claim it guards.
 #
 # IT WORKED, AND ON ITS FIRST REAL USE, WHICH IS WHY THIS PARAGRAPH IS PAST TENSE
 # NOW. Defect 13 landed the same day this case was written; adding the entry took
 # the case red with `13 entries but no "thirteen of them" — the total is stale`,
 # before anyone read the diff, and the fix was three summary lines the author had
-# just walked past. One correction to the prediction that used to be written here:
+# just walked past. That message is quoted verbatim HERE and only described in the
+# script's own header, deliberately: only `^#` lines of $UNDER_TEST are scanned, so a
+# retired total living in that file would be indistinguishable from a live claim once
+# the prose is flattened, while the same words in this file are just history. One correction to the prediction that used to be written here:
 # it said B and D would BOTH go red, and only B reported. The checks are guarded on
 # `[ -z "$hdr_fail" ]` and so short-circuit on the first stale claim — which is the
 # right behaviour for a message a human acts on, but it means the case names ONE
@@ -1168,6 +1210,22 @@ fi
 # is the cheap direction, and it is why D flags rather than tries to be clever.
 label="header's own counts match its enumeration"
 hdr_fail=""
+# THE PROSE IS FLATTENED FIRST, and that is this case's own fail-open, caught by the
+# PR-side review the day after it was written. B, C and D greped the file LINE BY LINE
+# while the claims they check are sentences that wrap. Check D — the only one whose
+# failure is silent — therefore could not see `of the` at the end of one comment line
+# and `six` at the start of the next, and that is not hypothetical: entry 6 read "the
+# first of the six that was a genuine SILENT PASS", wrapped exactly there, stale since
+# the seventh defect landed, and every run reported green. The one claim D exists to
+# catch was present in the file and invisible to it. Measured: `grep -oiE 'of the
+# [a-z]+'` line-wise yields no `of the six`; flattened it yields one.
+#
+# Only comment lines are joined (`^#`), so code strings cannot fabricate a phrase, and
+# the leading `#` is stripped so a wrapped sentence reads as one. B and C were blind
+# the same way and in the harmless direction — a wrapped total would have read as
+# missing and gone red — but they are moved onto the flattened text too, because a
+# false red teaches the next author to reword the prose to suit the parser.
+hdr_flat=$(grep '^#' "$UNDER_TEST" | sed -e 's/^#[[:space:]]*//' | tr '\n' ' ')
 hdr_words=(zero one two three four five six seven eight nine ten eleven twelve
            thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty)
 hdr_num_of() {  # number word -> value on stdout, empty if it is not one
@@ -1204,14 +1262,14 @@ total_word=""
   hdr_fail="$n_defects entries is past this check's number-word table — extend it"
 
 # (B) the stated total
-if [ -z "$hdr_fail" ] && ! grep -qiE "(^|[^a-z])$total_word of them\b" "$UNDER_TEST"; then
+if [ -z "$hdr_fail" ] && ! grep -qiE "(^|[^a-z])$total_word of them\b" <<<"$hdr_flat"; then
   hdr_fail="$n_defects entries but no \"$total_word of them\" — the total is stale"
 fi
 
 # (C) same-shape + own-class = total
 if [ -z "$hdr_fail" ]; then
-  same_w=$(grep -oiE '[a-z]+ are the same' "$UNDER_TEST" | head -1 | cut -d' ' -f1)
-  other_w=$(grep -oiE 'other [a-z]+ are their own class' "$UNDER_TEST" | head -1 | cut -d' ' -f2)
+  same_w=$(grep -oiE '[a-z]+ are the same' <<<"$hdr_flat" | head -1 | cut -d' ' -f1)
+  other_w=$(grep -oiE 'other [a-z]+ are their own class' <<<"$hdr_flat" | head -1 | cut -d' ' -f2)
   if ! same_n=$(hdr_num_of "$same_w") || ! other_n=$(hdr_num_of "$other_w"); then
     hdr_fail="could not read the same-shape/own-class split (\"$same_w\"/\"$other_w\")"
   elif [ $((same_n + other_n)) -ne "$n_defects" ]; then
@@ -1227,7 +1285,7 @@ if [ -z "$hdr_fail" ]; then
     v=$(hdr_num_of "$w") || continue
     [ "$v" -ge 4 ] || continue
     [ "$w" = "$total_word" ] || hdr_bad="$hdr_bad \"of the $w\""
-  done < <(grep -oiE 'of the [a-z]+' "$UNDER_TEST" | cut -d' ' -f3 |
+  done < <(grep -oiE 'of the [a-z]+' <<<"$hdr_flat" | cut -d' ' -f3 |
            tr '[:upper:]' '[:lower:]' | sort -u)
   [ -n "$hdr_bad" ] && hdr_fail="stale count phrase:$hdr_bad — wanted \"of the $total_word\""
 fi
