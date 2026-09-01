@@ -299,9 +299,12 @@ therefore never chose.** `HOME` is set in every shell anyone runs a suite from, 
 HOME` is the entire case, and it is red at exit 1 against the old form (`34 passed, 1
 failed`). When a script expands a variable it did not set, ask what happens when it is not
 there, because your own shell will never tell you.
-Seven of the twelve defects had a test that should have caught them and could not, and in
-every one of the seven the vacuity was in the fixture, the harness, or the inherited
-environment and never in the assertion. **The list is not converging on zero — four of the
+EIGHT of the twelve defects had a test that should have caught them and could not — defects
+3, 4, and 7 through 12 — and in every one of those eight the vacuity was in the fixture, the
+harness, or the inherited environment and never in the assertion. The count is written
+against the defect IDs because it was wrong in three places at once for a round: this line
+said SEVEN, the script header said SIX, and defect 12's own entry calls itself the eighth
+shape. A summary number with nothing anchoring it drifts the round after it is written. **The list is not converging on zero — four of the
 twelve were found by reviewers reading the file after the other eight had been fixed and
 written up, the eleventh in the round that fixed the ninth and tenth and the twelfth in the
 round that fixed the eleventh, all of them in code those write-ups had just finished

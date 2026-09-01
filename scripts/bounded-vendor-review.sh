@@ -108,9 +108,17 @@
 # defect — AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE
 # ADVERTISED — and the other three are their own classes, listed anyway because
 # dropping them would make the pattern look tidier than it is. Not one of the twelve
-# was found by the author reasoning about the code. Six of the twelve had a test that
-# should have caught them and could not, and in every one of those six the vacuity was
-# in the FIXTURE OR THE HARNESS rather than the assertion.
+# was found by the author reasoning about the code. EIGHT of the twelve had a test that
+# should have caught them and could not — defects 3, 4, and 7 through 12 — and in every
+# one of those eight the vacuity was in the FIXTURE, THE HARNESS, OR THE INHERITED
+# ENVIRONMENT rather than the assertion.
+#
+# The count is anchored to those defect IDs rather than asserted on its own, because it
+# has now been wrong in three different places at once: this line said SIX, all five
+# docs said SEVEN, and the entries below already numbered EIGHT distinct shapes (11 is
+# labelled "a seventh shape", so 12 is the eighth). A summary number with nothing
+# anchoring it drifts one round after it is written, which is the same reason the
+# suite's launch count now states how to derive itself instead of naming a figure.
 #
 # Four of the twelve (9 through 12) were found only AFTER the other eight were fixed
 # and written up, by reviewers reading the fixed file — 11 was found in the round that
