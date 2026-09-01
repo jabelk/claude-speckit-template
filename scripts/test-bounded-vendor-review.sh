@@ -1071,6 +1071,112 @@ else
   failed=$((failed + 1)); printf 'FAIL %s (exit %s)\n' "CONNECT_CAP > TOTAL_CAP -> warns" "$status"
 fi
 
+# --- THE HEADER'S OWN ARITHMETIC ----------------------------------------------
+#
+# Rounds 3 and 4 of review on this file produced NOTHING BUT stale summary counts.
+# The header said "Six of the twelve had a test that should have caught them",
+# every doc said "Seven", and the enumeration those numbers summarize had EIGHT
+# items — while every individual defect entry was correct. One round earlier the
+# same thing happened to the suite's launch count: it said 16 and was 20.
+#
+# The remedy applied by hand both times was to anchor the number to something
+# checkable. THIS CASE IS THAT REMEDY MADE MECHANICAL, and it is here rather than
+# in a doc because a prose rule about keeping counts honest is exactly the kind of
+# claim that has failed twice: the file already told its reader, in the paragraph
+# above the wrong number, that unanchored counts drift.
+#
+# It reads the numbered entries as the ONE source of truth for how many defects
+# there are, and checks the three prose claims that summarize them:
+#   A. the ordinals are contiguous 1..N — a repeated or skipped number is how
+#      "twelve entries" stays true while meaning nothing
+#   B. "<word> of them." names N
+#   C. the same-shape count plus the own-class count sums to N (nine + three)
+#   D. every "of the <number>" phrase naming a count of FOUR OR MORE names N
+#
+# The floor of four in D is measured, not guessed. The header's `of the ...`
+# phrases are, right now, three of "of the twelve" and one of "of the two caps"
+# — the second is two rate limiters, not two defects, and no rule short of
+# parsing English separates them. Anything below four is left alone; every
+# defect total this file has ever carried has been well above it.
+#
+# What it deliberately does NOT check is the test-hole count, because "defects 3,
+# 4, and 7 through 12" is prose and a parser for it would break more often than
+# the claim it guards. Stated as a limit rather than left as a gap: when defect
+# 13 lands, B and D both go red and name every phrase that needs a human, which
+# is the outcome that matters. A false red here costs one reword; that is the
+# cheap direction, and it is why D flags rather than tries to be clever.
+label="header's own counts match its enumeration"
+hdr_fail=""
+hdr_words=(zero one two three four five six seven eight nine ten eleven twelve
+           thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty)
+hdr_num_of() {  # number word -> value on stdout, empty if it is not one
+  local w i
+  w=$(tr '[:upper:]' '[:lower:]' <<<"$1")
+  for i in "${!hdr_words[@]}"; do
+    [ "${hdr_words[$i]}" = "$w" ] && { printf '%s' "$i"; return 0; }
+  done
+  return 1
+}
+
+# (A) the enumeration itself
+# read with a loop rather than `mapfile`, which does not exist in the bash 3.2
+# that macOS ships as /bin/bash — the rest of this suite is 3.2-clean and one
+# builtin from 4.0 would make it exit 1 before reaching any assertion
+hdr_ordinals=()
+while read -r ord; do
+  hdr_ordinals+=("$ord")
+done < <(grep -oE '^#[[:space:]]+[0-9]+\.' "$UNDER_TEST" | grep -oE '[0-9]+')
+n_defects=${#hdr_ordinals[@]}
+if [ "$n_defects" -lt 2 ]; then
+  hdr_fail="parsed $n_defects numbered entries — the enumeration did not read at all"
+else
+  for i in "${!hdr_ordinals[@]}"; do
+    if [ "${hdr_ordinals[$i]}" -ne $((i + 1)) ]; then
+      hdr_fail="entry #$((i + 1)) is numbered ${hdr_ordinals[$i]} — ordinals not contiguous"
+      break
+    fi
+  done
+fi
+total_word=""
+[ "$n_defects" -lt "${#hdr_words[@]}" ] && total_word="${hdr_words[$n_defects]}"
+[ -z "$total_word" ] && [ -z "$hdr_fail" ] &&
+  hdr_fail="$n_defects entries is past this check's number-word table — extend it"
+
+# (B) the stated total
+if [ -z "$hdr_fail" ] && ! grep -qiE "(^|[^a-z])$total_word of them\b" "$UNDER_TEST"; then
+  hdr_fail="$n_defects entries but no \"$total_word of them\" — the total is stale"
+fi
+
+# (C) same-shape + own-class = total
+if [ -z "$hdr_fail" ]; then
+  same_w=$(grep -oiE '[a-z]+ are the same' "$UNDER_TEST" | head -1 | cut -d' ' -f1)
+  other_w=$(grep -oiE 'other [a-z]+ are their own class' "$UNDER_TEST" | head -1 | cut -d' ' -f2)
+  if ! same_n=$(hdr_num_of "$same_w") || ! other_n=$(hdr_num_of "$other_w"); then
+    hdr_fail="could not read the same-shape/own-class split (\"$same_w\"/\"$other_w\")"
+  elif [ $((same_n + other_n)) -ne "$n_defects" ]; then
+    hdr_fail="$same_w + $other_w = $((same_n + other_n)), but there are $n_defects entries"
+  fi
+fi
+
+# (D) every "of the <four or more>" names the total
+if [ -z "$hdr_fail" ]; then
+  hdr_bad=""
+  while read -r w; do
+    [ -n "$w" ] || continue
+    v=$(hdr_num_of "$w") || continue
+    [ "$v" -ge 4 ] || continue
+    [ "$w" = "$total_word" ] || hdr_bad="$hdr_bad \"of the $w\""
+  done < <(grep -oiE 'of the [a-z]+' "$UNDER_TEST" | cut -d' ' -f3 |
+           tr '[:upper:]' '[:lower:]' | sort -u)
+  [ -n "$hdr_bad" ] && hdr_fail="stale count phrase:$hdr_bad — wanted \"of the $total_word\""
+fi
+
+if [ -n "$hdr_fail" ]; then
+  failed=$((failed + 1)); printf 'FAIL %-56s %s\n' "$label" "$hdr_fail"
+else
+  passed=$((passed + 1)); printf 'ok   %s (%s entries)\n' "$label" "$n_defects"
+fi
+
 echo
 echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]

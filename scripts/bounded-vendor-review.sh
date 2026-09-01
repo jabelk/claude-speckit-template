@@ -563,11 +563,21 @@ kill_tree() {
 # exists to prevent, so being killed is a case it has to handle, not only a case
 # it causes.
 #
-# The disable below is for SC2329 "never invoked": this function is reached only
-# through the traps under it, and the linter does not follow trap strings. Note
-# that the reason cannot be written on a second comment line — a line beginning
-# with the linter's own name is parsed as another directive and errors out.
-# shellcheck disable=SC2329
+# The disable below covers two codes, both saying the same wrong thing: SC2329
+# "never invoked" and SC2317 "command appears to be unreachable". This function is
+# reached only through the traps under it, and the linter does not follow trap
+# strings, so every line in the body reads as dead code. Note that the reason
+# cannot be written on a second comment line — a line beginning with the linter's
+# own name is parsed as another directive and errors out.
+#
+# SC2317 was added to the list on 2026-09-01 because CI FOUND IT AND THIS MACHINE
+# COULD NOT: shellcheck 0.11.0 locally emits only SC2329, while the version on the
+# GitHub runner emits SC2317 on all 15 lines of the body and failed the template
+# repo's `guards` job. Same class as defect 3 in the header — an environment the
+# author does not have is not an environment that does not exist. The workflows
+# repo stayed green throughout, because its CI does not shellcheck these files at
+# all, so the byte-identical twin was linted in exactly one of the two places.
+# shellcheck disable=SC2329,SC2317
 on_signal() {
   local sig="$1"
   trap - INT TERM HUP

@@ -177,9 +177,10 @@ makes the refusal *late*, never absent. Exit **3** means NO REVIEW HAPPENED, and
 deliberately not 1, because `coderabbit` already spends 1 on an unknown flag, on "not a
 git repository", and on "found actionable issues" alike. Override with
 `TOTAL_CAP=1800 scripts/bounded-vendor-review.sh ...` on a large diff.
-`scripts/test-bounded-vendor-review.sh` is its suite, 35 cases, with fakes that
-genuinely `sleep 600` — a fake that never hangs removes the only behaviour worth
-guarding.
+`scripts/test-bounded-vendor-review.sh` is its suite — it prints its own case
+total, and no figure is repeated here because that figure has gone stale twice —
+with fakes that genuinely `sleep 600`, since a fake that never hangs removes the
+only behaviour worth guarding.
 
 **Twelve defects have been found in that wrapper. Nine are every one of them an
 advertised bound — or an advertised verdict — that was not the one advertised; the other
@@ -309,6 +310,21 @@ twelve were found by reviewers reading the file after the other eight had been f
 written up, the eleventh in the round that fixed the ninth and tenth and the twelfth in the
 round that fixed the eleventh, all of them in code those write-ups had just finished
 explaining. Treat "twelve" as the number found so far.**
+
+**Rounds three and four of review on that file found nothing whatsoever except stale summary
+counts, and the remedy is now a test rather than a resolution.** The suite reads the header's
+twelve numbered entries as the only source of truth for how many defects there are, then
+checks the prose against them: contiguous ordinals, the stated total (`Twelve of them.`), the
+nine-plus-three split, and every `of the <number>` phrase naming a count of four or more. The
+floor of four is measured, not guessed — the header's only other such phrase is `of the two
+caps`, which is two rate limiters rather than two defects, and no rule short of parsing
+English separates them. Proved red four ways, one mutation per assertion, each on that case
+and no other. It deliberately does not parse the test-hole claim (`defects 3, 4, and 7
+through 12`), because a parser for that would break more often than the claim it guards; when
+defect 13 lands, the total and the `of the ...` checks both go red and name every phrase a
+human needs to read. A false red costs one reword, which is the cheap direction to be wrong
+in. **The reason this is a test and not a rule in a doc is that the rule was already in the
+doc**, in the paragraph directly above the number that was wrong.
 
 **Exit 3 is not a failure you retry until it passes, and it is not a clean gate.** The
 PR-side CodeRabbit review is a different path — GitHub to vendor, server-side, never
