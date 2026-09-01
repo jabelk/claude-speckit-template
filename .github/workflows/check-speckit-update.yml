@@ -32,9 +32,14 @@ jobs:
           # Truncate to 3000 chars to fit in issue body
           BODY="${BODY:0:3000}"
           EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-          echo "body<<$EOF" >> "$GITHUB_OUTPUT"
-          echo "$BODY" >> "$GITHUB_OUTPUT"
-          echo "$EOF" >> "$GITHUB_OUTPUT"
+          # One redirect, not three (SC2129). Pre-existing since #1; fixed here only
+          # because the new guard-suites workflow made actionlint part of this branch's
+          # gate, and a chained gate blocks the vendor leg on any actionable finding.
+          {
+            echo "body<<$EOF"
+            echo "$BODY"
+            echo "$EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Compare versions
         id: compare

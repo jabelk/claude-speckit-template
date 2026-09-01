@@ -26,6 +26,23 @@
 # reader is likely to mistake for a regression: the tracked-file cases assert the
 # OPPOSITE of what they asserted before that date.
 #
+# Seen red again 2026-09-01, twice more, and the second red is about THIS FILE.
+#
+#   - Round 12, the empty-value hole. Against the HEAD copy, whose refusal tested
+#     `[ -n "${!v:-}" ]`, the four new set-but-EMPTY cases failed with `exit 0,
+#     wanted 2` — 25 passed, 4 FAILED of 29. `GIT_DIR= <the gate>` walked straight
+#     through a guard whose whole subject is git location variables.
+#
+#   - The nine git-variable assertions were VACUOUS, and this one was measured
+#     rather than reasoned about. They greped the output for the bare variable NAME,
+#     and the refusal prints `unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+#     GIT_COMMON_DIR` as advice on every refusal — so the substring was present
+#     whichever variable had actually been set, and the assertion could not fail.
+#     Proof: strip `$poisoned` from the refusal's first line, so it names NOTHING,
+#     and the bare-name form scores 29 passed, 0 failed. The same mutation against
+#     the tightened form (`environment: $v`, matching after the colon) is 20 passed,
+#     9 FAILED. Nine assertions that read as coverage and were decoration.
+#
 # Usage:  scripts/test-preflight-vendor-review.sh
 #         BULK=1000 scripts/test-preflight-vendor-review.sh   # expected to FAIL
 # Exit:   0 every case passed
@@ -270,8 +287,14 @@ run_with_env "$GITENV_DIRTY" \
   "GIT_DIR=$GITENV_CLEAN/.git" "GIT_WORK_TREE=$GITENV_CLEAN"
 check "an exported GIT_DIR/GIT_WORK_TREE cannot redirect the inspection" \
   "$env_status" 2 "$env_out" "git location variable(s) set"
+# Asserted against the FIRST LINE, after the colon, and not against the bare names.
+# This read `"GIT_DIR GIT_WORK_TREE"` until 2026-09-01 and was VACUOUS: the refusal's
+# own `unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR` advice contains that
+# substring on every refusal, whichever variables were actually set, so the case could
+# not tell a refusal that names them from one that does not. Same shape as every other
+# entry in this file's history — the assertion could not fail.
 check "and the refusal names the variables rather than only refusing" \
-  "$env_status" 2 "$env_out" "GIT_DIR GIT_WORK_TREE"
+  "$env_status" 2 "$env_out" "environment: GIT_DIR GIT_WORK_TREE"
 
 # Round 11: the refusal's ADVICE is part of the guard, so it is asserted like one.
 # `env -u ...` applies to the command it prefixes and nothing else, so a caller
@@ -291,7 +314,25 @@ check "the refusal shows the wrapping form, not a bare env -u prefix" \
 for v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR; do
   run_with_env "$GITENV_CLEAN" "$v=$GITENV_DIRTY/.git"
   check "$v alone is refused, on a CLEAN tree, naming itself" \
-    "$env_status" 2 "$env_out" "$v"
+    "$env_status" 2 "$env_out" "environment: $v"
+done
+
+# ROUND 12: the same four, set but EMPTY. Until 2026-09-01 the refusal tested
+# `[ -n "${!v:-}" ]`, which cannot see an empty value, and this file said the case was
+# "deliberately ignored" because the `unset` below the refusal covered it. That is
+# round 10's mistake restated: the unset fixes THIS process while the rest of the gate
+# runs in the caller's shell, so `GIT_DIR= <the gate>` passed here and the vendor leg
+# inherited it. Empty is not equivalent to unset — measured 2026-09-01, `GIT_DIR=''`
+# gives `fatal: not a git repository: ''` at 128 and `GIT_WORK_TREE=''` gives `The
+# empty string is not a valid path` at 128, so git BREAKS rather than reading
+# elsewhere. `GIT_INDEX_FILE=''` is the quiet one: it does not error at all, and git
+# reports every tracked file as `D` deleted. That contradicts the /tmp/empty
+# measurement recorded above (exit 128, `index file smaller than expected`), which is
+# why the empty STRING needs its own case rather than being assumed covered by it.
+for v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR; do
+  run_with_env "$GITENV_CLEAN" "$v="
+  check "$v set but EMPTY is refused too, naming itself" \
+    "$env_status" 2 "$env_out" "environment: $v"
 done
 
 # `GIT_INDEX_FILE` gets one more case, because the round-9 version of it was

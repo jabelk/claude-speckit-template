@@ -19,7 +19,7 @@ BASE=main   # or `staging` on repos with a staging branch — set it once, here
 scripts/preflight-vendor-review.sh \
   && review-plan-v2 --static-only --plain --base "$BASE" \
   && scripts/preflight-vendor-review.sh \
-  && coderabbit review --base "$BASE" --include-untracked
+  && scripts/bounded-vendor-review.sh --base "$BASE" --include-untracked
 # leg 1: deterministic only, nothing is billed, nothing leaves the machine.
 #        `--plain` IS a review-plan-v2 flag: `[--plain | --agent]`, plain being
 #        the default. Passed explicitly so the --agent form below is one edit away.
@@ -27,6 +27,8 @@ scripts/preflight-vendor-review.sh \
 #        already its default and the flag is an `unknown option` at exit 1. The
 #        two binaries differ here, so do not carry the flag across.
 # preflight twice on purpose: once to fail fast, once immediately before the send
+# bounded-vendor-review is `coderabbit review` with a clock on it — never call the
+#        CLI bare from here; it has no timeout of its own. See below.
 ```
 
 **The guard is a script because seven review rounds proved prose could not hold it,
@@ -101,7 +103,8 @@ fail-closed path for unreadable repositories and proved nothing. There is now on
 per variable set alone on a clean tree, one with a valid alternate index built by
 `git read-tree HEAD`, and one running the same clean tree with nothing exported that
 must pass, because without it a script refusing everything would score green on all
-four. Suite is 24 cases; seen red at `17 passed, 7 failed` by neutering the refusal.
+four. The suite reached 24 cases at that round; seen red at `17 passed, 7 failed` by
+neutering the refusal.
 
 **An eleventh round fixed the refusal's own advice, which could defeat the refusal.**
 `env -u ...` applies to the command it prefixes and nothing else, so a caller told only
@@ -115,6 +118,110 @@ wrapping form second, and says outright that a prefix on one leg covers only tha
 25th test case asserts that wording, because advice which defeats the guard is part of
 the guard; seen red at `24 passed, 1 failed` by replacing the wrapping form with a bare
 `env -u` mention.
+
+**A twelfth round: an explicitly EMPTY git variable walked through the refusal, and
+nine of its test cases could not have caught it.** The refusal tested
+`[ -n "${!v:-}" ]`, which is blind to a set-but-empty value, and this file's own note
+said the case was deliberately ignored because the `unset` below the refusal covered
+it — round 10's mistake restated, since the unset fixes one process while the rest of
+the gate runs in the caller's shell. So `GIT_DIR= <the gate>` passed the check and the
+vendor leg inherited it. Empty is not equivalent to unset and it is not harmless:
+measured 2026-09-01, `GIT_DIR=''` gives `fatal: not a git repository: ''` at exit 128
+and `GIT_WORK_TREE=''` gives `The empty string is not a valid path` at 128, so git
+*breaks* rather than reading elsewhere. `GIT_INDEX_FILE=''` is the quiet one — it does
+not error at all, and git reports every tracked file as `D` deleted, which contradicts
+the `/tmp/empty` measurement recorded above (exit 128, `index file smaller than
+expected`) and is exactly why the empty string needed its own case rather than being
+assumed covered by the adjacent one. Fix is `[ -n "${!v+x}" ]`, which asks whether the
+variable is *set*.
+
+The test half of that round is the part worth carrying. Nine assertions greped the
+output for the bare variable **name**, and the refusal prints `unset GIT_DIR
+GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR` as advice on *every* refusal — so the
+substring was present whichever variable had actually been set, and no assertion could
+distinguish a refusal that names the offender from one that names nothing. Measured
+rather than argued: strip `$poisoned` from the refusal's first line so it names nothing
+at all, and the bare-name form scores `29 passed, 0 failed`; the tightened form,
+matching `environment: $v` after the colon, scores `20 passed, 9 failed`. Nine
+assertions that read as coverage for four rounds and were decoration. The anchor
+matters as much as the needle — grep for the *sentence* the check produces, not for a
+token that also appears in its advice. Suite is 29 cases; the four new empty-value
+cases are red at `25 passed, 4 failed` against the previous script.
+
+**`scripts/bounded-vendor-review.sh` is the second committed guard on this leg, and it
+exists because the CLI can hang forever.** On 2026-08-31 `coderabbit review` stopped
+connecting mid-session with nothing changed on the machine: 17 successful reviews that
+day per `~/.coderabbit/stats.json`, the last at 12:47:13 PDT, then every run from
+15:41:43 PDT dying at `Establishing WebSocket connection to URL
+wss://ide.coderabbit.ai/ws` — one sat silent for twenty minutes until killed by hand.
+The CLI does not retry, warn, or give up. Ruled out by measurement: concurrency,
+version drift (0.7.5 current), auth, the network path to that host, and a corporate
+VPN, which was the leading hypothesis and was wrong — tunnel down, same hang. The cause
+was outside the machine, which is the *normal* case for a hosted reviewer; the defect
+worth fixing is that an unbounded wait turns someone else's outage into a gate that
+neither passes nor fails, and the operator finds out by noticing nothing has happened
+for twenty minutes. A fail-open guard leaves you a wrong answer you might question; a
+hang leaves you no answer at all, and "still running" is indistinguishable from
+"working".
+
+Two bounds, and only one of them is the decision. `TOTAL_CAP` (default 900s) is
+wall-clock arithmetic calling no external command, for the same reason the preflight's
+decision is one `[ -n ]`. `CONNECT_CAP` (default 120s) is an early kill that reads
+**the reviewer's own stdout** and asks whether its last progress line still names the
+connect phase (`Connecting to CodeRabbit... 1m 01s elapsed`) or a later one
+(`Summarizing changes...`, `Writing review comments...`); every way that read can fail
+leaves it declining to kill and deferring to `TOTAL_CAP`, so a broken `CONNECT_CAP`
+makes the refusal *late*, never absent. Exit **3** means NO REVIEW HAPPENED, and it is
+deliberately not 1, because `coderabbit` already spends 1 on an unknown flag, on "not a
+git repository", and on "found actionable issues" alike. Override with
+`TOTAL_CAP=1800 scripts/bounded-vendor-review.sh ...` on a large diff.
+`scripts/test-bounded-vendor-review.sh` is its suite, 29 cases, with fakes that
+genuinely `sleep 600` — a fake that never hangs removes the only behaviour worth
+guarding.
+
+**Six defects have been found in that wrapper, every one of them an advertised bound —
+or an advertised verdict — that was not the one advertised, and not one was found by
+reasoning about the code.** They are worth listing because they are the shape this leg
+fails in. (1) The connect kill required *exactly one* new log file, so a second gate
+running concurrently switched it off and the 120s bound silently became the 900s one.
+(2) The wrapper trapped no signals, so killing the wrapper left `coderabbit review`
+running unsupervised; it now traps INT/TERM/HUP and kills the reviewer's whole process
+tree with `pgrep -P`, since without `setsid` a bare `kill` leaves the grandchildren
+holding the socket. (3) `${VAR:-default}` handed the default to an explicitly empty
+value, so a cap the operator tried to set was silently not set — and `CR_BIN=` fell
+back to the real `coderabbit` and launched an actual vendor review from inside the test
+suite. (4) The worst until the sixth: the connect detector read the CLI's **log file**,
+and that log gets nothing after the WebSocket marker during a *healthy* review either,
+so working and wedged were byte-identical and the cap killed real reviews from the day
+it was written. It now reads stdout. (5) The wait loop slept the full `POLL` before
+checking either cap, so `POLL=3600` against `TOTAL_CAP=900` left a hung reviewer alive
+about an hour; the nap is now the shorter of `POLL` and the nearer deadline. (6) The
+only one that manufactured a **pass**: past the caps it ran `exit 0` unconditionally
+and discarded the reviewer's own status, so a reviewer killed by a signal and one that
+failed before reviewing anything both reported a clean vendor review. Exit 3 now has
+three routes — killed at a cap, killed by a signal (status ≥ 128, unambiguous because
+the CLI's whole vocabulary is 0 and 1), or non-zero with no post-connect phase line on
+stdout. The CLI's status is deliberately not adopted wholesale, since findings exit 1
+and findings mean the review happened.
+
+Two things from that history generalise past this wrapper. **An exit 3 dated before
+2026-09-01 may have been a false refusal** — defect 4 killed healthy reviews at
+`CONNECT_CAP` — so read the reviewer output the refusal prints rather than trusting the
+verdict. And the vacuity was in the **fixtures**, twice, in opposite directions: one
+fake wrote a log line the real CLI never emits, manufacturing the very signal under
+test, while another omitted a progress line the real CLI always emits and so scored
+`27 passed, 2 failed` against a *correct* script. A double can make right code look
+wrong as readily as it makes wrong code look right, and reading the test will not
+reveal either.
+
+**Exit 3 is not a failure you retry until it passes, and it is not a clean gate.** The
+PR-side CodeRabbit review is a different path — GitHub to vendor, server-side, never
+touching this machine — and on 2026-08-31 two PRs got full reviews while the local CLI
+hung on every invocation. It also sees more than the local leg does: whole PR diff,
+cross-document context, earlier rounds. So on exit 3: push, let the PR-side review be
+the vendor review, and **say in the PR which review the branch actually got.**
+Reporting "gate clean" after an exit 3 is the one thing that makes this wrapper
+pointless.
 
 **Two calls narrow the check-to-send window; they do not close it.** A concurrent
 writer can still land a file between the second call's exit and the moment the vendor
@@ -185,6 +292,7 @@ Keep running it because it is the half CodeRabbit does not replace: a pre-push s
 - **`high_risk_paths` in `.review-plan-v2.yaml` now drives nothing.** It selected files for the retired cascade. If a repo has review briefs worth keeping there, they belong in `.coderabbit.yaml` as `reviews.path_instructions`.
 - **`coderabbit review --plain` is not a flag.** It exits **1** with `error: unknown option '--plain'`, which is the same 1 as "found actionable issues" — see the exit-code paragraph above. Plain text is already the default. It also reviews **tracked** changes only, so `git add` a new file or pass `--include-untracked`.
 - **`--static-only --no-static-analyzers` is exit 2**, not a clean run, because together they check nothing.
+- **Never run `coderabbit review` bare from an agent session.** With no bound it can sit silent indefinitely (measured 2026-08-31, twenty minutes and still going). A hand-rolled `timeout 180 coderabbit review ...` is not the fix on macOS either: `timeout(1)` is GNU coreutils and absent by default, so the command fails with `command not found: timeout`. **That failure is loud in a chain and silent out of one** — `command not found` is exit **127**, so inside the `&&` gate the chain stops there and you find out immediately; the hazard is the *unchained* two-line form, where the failed `timeout` line is followed by everything after it regardless. Use `scripts/bounded-vendor-review.sh`, whose wait loop is Bash builtins only, so a safety guard does not sit behind `brew install coreutils`.
 - **`coderabbit auth status`, not `which coderabbit`.** An installed-but-signed-out CLI is a binary that cannot review. `coderabbit auth login` needs a TTY that Claude Code's shell does not provide; use `coderabbit auth login --agent`, which prints an `authUrl` and waits on a `127.0.0.1` callback. That callback URL carries a live access token, so treat it as a secret: never paste it into a chat, a log, or a commit.
 
 ## Structured output
@@ -194,7 +302,7 @@ set -o pipefail   # or check ${PIPESTATUS[0]} / ${pipestatus[1]} in zsh
 scripts/preflight-vendor-review.sh \
   && review-plan-v2 --static-only --agent --base "$BASE" | jq 'select(.type == "finding" or .type == "summary")' \
   && scripts/preflight-vendor-review.sh \
-  && coderabbit review --agent --base "$BASE" --include-untracked
+  && scripts/bounded-vendor-review.sh --agent --base "$BASE" --include-untracked
 ```
 
 **`set -o pipefail` is part of the example, not decoration.** Without it the pipeline reports `jq`'s status, so an analyzer exiting 1 or 2 reads as 0 — a gate that found something, or failed to run at all, reported as clean by the one number a caller checks.
@@ -219,7 +327,7 @@ The `review-plan-v2` binary is a symlink at `~/.local/bin/review-plan-v2` → th
 scripts/preflight-vendor-review.sh \
   && gitleaks git --log-opts="$BASE..HEAD" --redact \
   && scripts/preflight-vendor-review.sh \
-  && coderabbit review --base "$BASE" --include-untracked
+  && scripts/bounded-vendor-review.sh --base "$BASE" --include-untracked
 ```
 
 **Chained with `&&`, not listed on separate lines.** A leak exits non-zero, and on separate lines the next command runs anyway — sending to the vendor the exact diff the scan just objected to. Use `gitleaks dir . --redact` in place of the `git` form when untracked files are in play; it scans the working tree, which the `git` form does not. Both forms verified on gitleaks 8.30.1, `--redact` on both subcommands.

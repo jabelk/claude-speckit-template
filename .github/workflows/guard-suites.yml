@@ -1,0 +1,46 @@
+name: guard suites
+# The two pre-push vendor guards carry test suites; this runs them, because a suite
+# that nothing runs is a suite that rots in every repo bootstrapped from this template.
+#
+# Linux on purpose, and not only for cost. `bounded-vendor-review.sh` prefers `setsid`
+# to put the reviewer in its own process group and falls back to a `pgrep -P` tree walk
+# where there is none. macOS has no `setsid`, so every developer run takes the fallback
+# and this job is the ONLY place the primary branch is exercised.
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  guards:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Separate steps, and each one gets `if: ${{ !cancelled() }}`. A step with no
+      # `if:` carries an implicit `success()`, so an earlier red step would SKIP the
+      # ones below it — and a skipped guard suite renders as a grey tick rather than
+      # an X, which is the failure class both of these scripts exist to remove:
+      # a check whose absence is indistinguishable from its success. `!cancelled()`
+      # rather than `always()`, because a cancelled run should stop rather than keep
+      # sleeping through fixtures that genuinely `sleep 600`.
+      - name: Run the preflight-vendor-review guard suite
+        if: ${{ !cancelled() }}
+        run: bash scripts/test-preflight-vendor-review.sh
+
+      - name: Run the bounded-vendor-review guard suite
+        if: ${{ !cancelled() }}
+        run: bash scripts/test-bounded-vendor-review.sh
+
+      # Both scripts are copies kept byte-identical with the source of truth in the
+      # workflows repo. Nothing here can verify that (the other repo is private and
+      # not checked out), so this only catches a shell error introduced locally.
+      - name: shellcheck the guards and their suites
+        if: ${{ !cancelled() }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck scripts/preflight-vendor-review.sh \
+                     scripts/test-preflight-vendor-review.sh \
+                     scripts/bounded-vendor-review.sh \
+                     scripts/test-bounded-vendor-review.sh
