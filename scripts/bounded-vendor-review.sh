@@ -99,9 +99,11 @@
 #   describes is how the next reader reproduces the bug.
 #
 # THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because
-# each is a way this file's own claims were false. Six of them, and every single
-# one is the same defect: AN ADVERTISED BOUND THAT WAS NOT THE BOUND. Not one was
-# found by the author reasoning about the code.
+# each is a way this file's own claims were false. Seven of them, and the first six
+# are all the same defect: AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS
+# NOT THE ONE ADVERTISED. The seventh is a different class and is listed anyway,
+# because dropping it would make the pattern look tidier than it is. Not one of the
+# seven was found by the author reasoning about the code.
 #
 #   1. THE EARLY KILL WAS DEAD WHENEVER A SECOND CLI SESSION WAS RUNNING. The
 #      original `this_log()` demanded EXACTLY one log file new since launch and
@@ -243,11 +245,29 @@
 #      as exit 128 `index file smaller than expected`; the empty STRING is the
 #      quieter case, and both suites now cover the empty-value form of all four.
 #
+#   7. THE WRAPPER'S OWN PROSE WENT OUT ON THE REVIEWER'S STDOUT. Not a bound this
+#      time, and listed anyway rather than dropped for spoiling the pattern — the
+#      convention above is that every defect found in this file stays in the header,
+#      and quietly omitting the one that does not fit the tidy sentence is its own
+#      version of the problem. The skills invoke this script with `--agent`, where
+#      the CLI's stdout is a machine-readable stream; the summary line and its four
+#      continuation lines went to that same stream, so a consumer parsing the vendor
+#      leg read records the vendor never emitted. Every other message here was
+#      already on stderr, so this was inconsistency rather than design. Caught by the
+#      PR-side review on the promotion branch, before any consumer parsed it.
+#
+#      Its own test hole is the more interesting half: `case_run` captures `2>&1`, so
+#      all thirteen fixtures were structurally blind to which stream anything went
+#      to. Same lesson as 3 and 4 from a third angle — the HARNESS removed the
+#      condition under test, and no amount of reading the assertions would show it.
+#      The suite now has one case that captures the two streams separately, and it is
+#      red on exactly one assertion against the pre-fix script.
+#
 # 120s for the connect is not a guess about how long connecting should take —
 # it is a claim that connecting does not take two minutes. NOT VERIFIED as a
 # normal duration, and stated as a limit rather than glossed: the logs of the 17
 # successful runs had been pruned before this was written. What IS now verified is
-# the failure mode of getting it wrong. Before defect 3 was fixed the cap fired
+# the failure mode of getting it wrong. Before defect 4 was fixed the cap fired
 # against healthy reviews, so "spurious exit 3" was not hypothetical — it was
 # every run. With the detector reading the phase name, a legitimately slow
 # connect is the only remaining way to trip it spuriously, and the fix for that
@@ -412,7 +432,7 @@ trap 'on_signal HUP' HUP
 # Which log files already exist. Used ONLY to name this run's log(s) in the
 # failure message, so the reader can go look. NOT part of any decision — the logs
 # were the decision until 2026-09-01 and could not distinguish a working review
-# from a hung one (defect 3). `|| true` because an unreadable or absent log
+# from a hung one (defect 4). `|| true` because an unreadable or absent log
 # directory must not abort the review; it just means the refusal cannot cite a
 # file.
 pre_logs=$(ls -1 "$LOG_DIR" 2>/dev/null || true)
@@ -437,7 +457,7 @@ killed_reason=""
 # Every log file present now and absent from the pre-launch snapshot, one path per
 # line; empty output means nothing new appeared. ALL of them, not the single one
 # the first version demanded: a concurrent gate in another repo writes its own log
-# (defect 1). That fix now only affects which files a refusal cites, since defect 3
+# (defect 1). That fix now only affects which files a refusal cites, since defect 4
 # took logs out of the decision entirely — but naming only some of the files still
 # sends the reader to the wrong one, so "all of them" remains correct here.
 new_logs() {
@@ -595,7 +615,14 @@ fi
 # rather than adopting it keeps the one-code-for-everything problem visible
 # instead of laundering it through this script's exit code.
 cat "$out"
-echo
+# STDOUT BELONGS TO THE REVIEWER, NOT TO THIS SCRIPT. `cat "$out"` above is the
+# CLI's own output and belongs on stdout; every message this wrapper writes goes to
+# stderr, including this blank separator. The skills call this script with `--agent`,
+# and in that mode the CLI's stdout is a machine-readable stream — prose appended to
+# it is a record the vendor never emitted, read by a parser that cannot tell the
+# difference. Same shape as the rest of this file: our own output made to look like
+# the thing we are reporting on.
+echo >&2
 
 # THE VERDICT GATE — defect 6. This path exited 0 UNCONDITIONALLY until 2026-09-01,
 # on the contract stated just above: a verdict exists, read it yourself. The hole is
@@ -647,9 +674,9 @@ if [ "$cr_status" -ne 0 ] && [ "$reviewer_phase" != "connected" ]; then
   exit 3
 fi
 
-echo "bounded-vendor-review: reviewer returned after ${SECONDS}s with exit status ${cr_status}."
-echo "  That status is NOT a verdict — the CLI uses 1 for an unknown flag, for"
-echo "  'not a git repository', and for 'found actionable issues' alike. Read the"
-echo "  output above, including the 'reviewing N of M' line, which is the only"
-echo "  place a path filter or an empty diff shows up."
+echo "bounded-vendor-review: reviewer returned after ${SECONDS}s with exit status ${cr_status}." >&2
+echo "  That status is NOT a verdict — the CLI uses 1 for an unknown flag, for" >&2
+echo "  'not a git repository', and for 'found actionable issues' alike. Read the" >&2
+echo "  output above, including the 'reviewing N of M' line, which is the only" >&2
+echo "  place a path filter or an empty diff shows up." >&2
 exit 0

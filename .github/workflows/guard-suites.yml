@@ -15,8 +15,20 @@ permissions:
 jobs:
   guards:
     runs-on: ubuntu-24.04
+    # The hang fixtures `sleep 600` on purpose, and a lost cap is the exact failure
+    # this suite exists to detect — so without a job bound, the regression it is
+    # built to catch would run toward the 6-hour default instead of failing. A suite
+    # that proves bounds needs one of its own. 15 minutes against a suite that
+    # finishes in about one.
+    timeout-minutes: 15
     steps:
+      # `persist-credentials: false`: both suites build throwaway git repositories
+      # and run fake binaries off a temporary PATH, and neither needs a remote. The
+      # default writes the job token into .git/config, where the fixtures' own git
+      # commands would be running beside it for the rest of the job.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Separate steps, and each one gets `if: ${{ !cancelled() }}`. A step with no
       # `if:` carries an implicit `success()`, so an earlier red step would SKIP the

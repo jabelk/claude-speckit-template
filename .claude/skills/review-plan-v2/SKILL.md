@@ -145,7 +145,7 @@ at all, and the bare-name form scores `29 passed, 0 failed`; the tightened form,
 matching `environment: $v` after the colon, scores `20 passed, 9 failed`. Nine
 assertions that read as coverage for four rounds and were decoration. The anchor
 matters as much as the needle — grep for the *sentence* the check produces, not for a
-token that also appears in its advice. Suite is 29 cases; the four new empty-value
+token that also appears in its advice. Suite is 29 cases at that round; the four new empty-value
 cases are red at `25 passed, 4 failed` against the previous script.
 
 **`scripts/bounded-vendor-review.sh` is the second committed guard on this leg, and it
@@ -175,13 +175,14 @@ makes the refusal *late*, never absent. Exit **3** means NO REVIEW HAPPENED, and
 deliberately not 1, because `coderabbit` already spends 1 on an unknown flag, on "not a
 git repository", and on "found actionable issues" alike. Override with
 `TOTAL_CAP=1800 scripts/bounded-vendor-review.sh ...` on a large diff.
-`scripts/test-bounded-vendor-review.sh` is its suite, 29 cases, with fakes that
+`scripts/test-bounded-vendor-review.sh` is its suite, 30 cases, with fakes that
 genuinely `sleep 600` — a fake that never hangs removes the only behaviour worth
 guarding.
 
-**Six defects have been found in that wrapper, every one of them an advertised bound —
-or an advertised verdict — that was not the one advertised, and not one was found by
-reasoning about the code.** They are worth listing because they are the shape this leg
+**Seven defects have been found in that wrapper. The first six are every one of them an
+advertised bound — or an advertised verdict — that was not the one advertised; the
+seventh is a different class and is listed anyway, because a tidier pattern would be a
+false one. Not one of the seven was found by reasoning about the code.** They are worth listing because they are the shape this leg
 fails in. (1) The connect kill required *exactly one* new log file, so a second gate
 running concurrently switched it off and the 120s bound silently became the 900s one.
 (2) The wrapper trapped no signals, so killing the wrapper left `coderabbit review`
@@ -202,7 +203,11 @@ failed before reviewing anything both reported a clean vendor review. Exit 3 now
 three routes — killed at a cap, killed by a signal (status ≥ 128, unambiguous because
 the CLI's whole vocabulary is 0 and 1), or non-zero with no post-connect phase line on
 stdout. The CLI's status is deliberately not adopted wholesale, since findings exit 1
-and findings mean the review happened.
+and findings mean the review happened. (7) Not a bound: the wrapper's own five-line
+summary went out on **stdout**, which is the reviewer's stream — and this skill calls
+the wrapper with `--agent`, where that stream is machine-readable, so a consumer parsing
+the vendor leg read records the vendor never emitted. Every other message was already on
+stderr. Caught by the PR-side review on the promotion branch, before anything parsed it.
 
 Two things from that history generalise past this wrapper. **An exit 3 dated before
 2026-09-01 may have been a false refusal** — defect 4 killed healthy reviews at
@@ -212,7 +217,13 @@ fake wrote a log line the real CLI never emits, manufacturing the very signal un
 test, while another omitted a progress line the real CLI always emits and so scored
 `27 passed, 2 failed` against a *correct* script. A double can make right code look
 wrong as readily as it makes wrong code look right, and reading the test will not
-reveal either.
+reveal either. Defect 7 adds a third angle on the same warning, and it is the one to
+carry into any suite: the vacuity was in the **harness**, not in a fake or an assertion.
+`case_run` captures `2>&1`, so all thirteen fixtures were structurally blind to which
+stream anything went to — the merge that is right for every other case is exactly what
+removed the condition under test. One case now captures the two streams separately and
+is red on exactly one assertion (`29/1`) against the pre-fix script. When a harness
+merges two things, ask whether the difference between them is what you are asserting on.
 
 **Exit 3 is not a failure you retry until it passes, and it is not a clean gate.** The
 PR-side CodeRabbit review is a different path — GitHub to vendor, server-side, never

@@ -152,10 +152,13 @@
 # THAT MEASUREMENT IS NOW HISTORICAL AND ITS COUNT IS NOT CURRENT, which is worth
 # stating rather than quietly leaving an `11` for a reader to trust. `11` was every
 # launch the suite made that day: nine `case_run` fixtures plus the orphan case
-# plus the CONNECT_CAP-above-TOTAL_CAP case (the refusal cases use `CR_BIN=true`
-# and never launch a CLI). The suite has since gained two `case_run` cases, so it
-# makes 13 launches, and the two added after 2026-08-31 were never put in front of
-# the shim.
+# plus the CONNECT_CAP-above-TOTAL_CAP case (the refusal cases never launch a CLI —
+# they exit at the guard, or name an absent `CR_BIN`). The suite has since gained
+# four `case_run` cases and the stream-separation case, so it makes 16 launches, and
+# the five added after 2026-08-31 were never put in front of the shim. Count the
+# `case_run` calls with `grep -c '\bcase_run "'` rather than `^case_run`: one of them
+# carries a `POLL_OVERRIDE=` prefix, and anchoring at the line start undercounts by
+# one — which it did on 2026-09-01, in the very act of correcting this number.
 #
 # The reason that is acceptable rather than a gap: since 2026-08-31 this suite runs
 # in CI on ubuntu-24.04, which has a REAL util-linux `setsid`, so every case
@@ -483,7 +486,7 @@ case_run "stuck at the WebSocket connect -> exit 3, early" \
 case_run "stuck at connect -> says NO VENDOR REVIEW HAPPENED" \
   3 "NO VENDOR REVIEW HAPPENED" "" fake_hang_at_connect
 
-# DEFECT 3, AND THE CASE THAT DID NOT EXIST WHEN IT SHIPPED. A review that
+# DEFECT 4, AND THE CASE THAT DID NOT EXIST WHEN IT SHIPPED. A review that
 # CONNECTED and is working, whose log is byte-identical to the outage fake above
 # because the real CLI logs nothing after the marker either. The early kill must
 # NOT fire; TOTAL_CAP must catch it, and the assertion is the WORDING, since both
@@ -542,11 +545,48 @@ case_run "findings (CLI exit 1) -> this script still exits 0" \
 case_run "findings -> reports the CLI status without adopting it" \
   0 "exit status 1" "" fake_found_issues
 
+# --- STDOUT BELONGS TO THE REVIEWER -------------------------------------------
+#
+# Not a `case_run`, and the reason IS the case: `case_run` captures `2>&1`, so every
+# fixture above is blind to which stream anything went to. That is how the wrapper
+# shipped writing its own five-line summary to stdout while the skills invoke it with
+# `--agent`, where the CLI's stdout is a machine-readable stream — a parser reading
+# the vendor leg gets records the vendor never emitted. The merge in `case_run` is
+# right for those cases and is exactly what removed the condition here, which is the
+# usual shape: the harness, not the assertion.
+#
+# Three assertions, and the middle one is load-bearing. Against the pre-fix script
+# the first and third still pass and only "stdout carries no wrapper prose" goes red,
+# which is the defect stated out loud.
+n=$((passed + failed + 1))
+dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" \
+  bash "$UNDER_TEST" --base main >"$dir/stdout" 2>"$dir/stderr"
+status=$?
+label="wrapper prose on stderr, reviewer output on stdout"
+why=""
+[ "$status" -eq 0 ] || why="exit $status, wanted 0"
+if [ -z "$why" ] && ! grep -qF "No findings." "$dir/stdout"; then
+  why="stdout did not carry the reviewer's own output"
+fi
+if [ -z "$why" ] && grep -qF "bounded-vendor-review:" "$dir/stdout"; then
+  why="stdout carried this wrapper's prose, which --agent consumers parse as vendor records"
+fi
+if [ -z "$why" ] && ! grep -qF "bounded-vendor-review: reviewer returned" "$dir/stderr"; then
+  why="stderr did not carry the wrapper's summary"
+fi
+if [ -z "$why" ]; then
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+else
+  failed=$((failed + 1)); printf 'FAIL %s -- %s\n' "$label" "$why"
+fi
+
 # --- DEFECT 6: "returned" is not "produced a verdict" -------------------------
 #
 # The reviewer-returned path exited 0 unconditionally, so a CLI that died on a
 # signal or failed before reviewing anything reported as a completed review — the
-# first of this script's six defects that was a genuine SILENT PASS. The two cases
+# first of this script's defects that was a genuine SILENT PASS. The two cases
 # above are the other half of the guard and must keep passing: the gate has to
 # refuse a non-review while still letting a findings run through, and the two are
 # the same exit status. Break the gate in either direction and one pair goes red.
