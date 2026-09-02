@@ -92,8 +92,11 @@
 # let all five be reproduced in ten lines and pinned by tests, rather than argued
 # about. This summary itself said "rounds 8 to 11" and "all four" until
 # 2026-09-01, one round after round 12 landed: a count contradicting the
-# enumeration below it, which is the class the bounded suite's header check exists
-# for, in the file that check scans and about the part of it nothing parses.
+# enumeration below it. The bounded suite carried a check for exactly that class
+# for two days, and it was deleted on 2026-09-01 — its subject was a comment
+# header rather than a behaviour, and it cost four review rounds of its own. So
+# nothing parses this paragraph. Anchor any count here to the round numbers
+# below it, by hand, and expect no test to tell you when it goes stale.
 #
 # What it does NOT check: files matched by `.gitignore`. The vendor never
 # receives them, so they are not this script's business.

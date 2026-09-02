@@ -297,13 +297,24 @@ fake_hang_two_logs() {
 # anything, so what this now pins is the REFUSAL MESSAGE: it must cite both files,
 # because naming one of two sends the reader to the wrong file. stdout is stuck at
 # the connect phase, so the early kill must still fire.
+#
+# BOTH LOGS ARE WRITTEN BEFORE THE FIRST SLEEP, and that is a fix rather than a
+# simplification. This fixture wrote the second one after `sleep 1`, to model the
+# concurrent gate's log arriving partway through — the real offset was 79s. That was
+# harmless against the old CONNECT_CAP of 120s and became a 1s margin against a 2s
+# cap when the caps were shrunk to make the suite fast, so under load the refusal
+# arrived before the second log existed and the case failed intermittently: seen
+# twice in six runs on 2026-09-01. The delay was never load-bearing — `new_logs` is
+# a set difference over the directory listing taken before launch, not an mtime
+# comparison, so a log written at t=0 and one written at t=1 are equally new. An
+# intermittent case is this file's own disease one layer out: a green run that
+# proves nothing, and no assertion in it looks wrong.
 mkdir -p "$CR_LOG_DIR"
 one="$CR_LOG_DIR/aaa-first-$$.log"
 two="$CR_LOG_DIR/bbb-second-$$.log"
 echo '{"message":"Establishing WebSocket connection to URL"}' >>"$one"
-printf 'Connecting to CodeRabbit... 1s elapsed\r'
-sleep 1
 echo '{"message":"Establishing WebSocket connection to URL"}' >>"$two"
+printf 'Connecting to CodeRabbit... 1s elapsed\r'
 printf 'Connecting to CodeRabbit... 30s elapsed\r'
 sleep 600
 EOF
@@ -610,15 +621,42 @@ EOF
 # --- harness -----------------------------------------------------------------
 #
 # case_run <label> <want_exit> <want_text|""> <max_secs|""> <builder>
-# max_secs, when set, asserts the case finished FASTER than that. For the
-# connect case this is the anti-vacuity assertion: it is what distinguishes the
-# early kill from TOTAL_CAP catching the same fake later.
+# max_secs, when set, asserts the case finished FASTER than that.
+#
+# This said max_secs is what distinguishes the early kill from TOTAL_CAP catching the
+# same fake later. MEASURED 2026-09-01 while halving the caps, and that is not what it
+# does: the two paths print DIFFERENT sentences, so `want_text` already separates them,
+# and every mutation that moves the connect kill to TOTAL_CAP is caught by the wording
+# before the clock is ever consulted (two mutations tried, four and three reds, all on
+# the message). What max_secs actually catches is a bound that fires at the right cap
+# and then takes too long to finish — `sleep 2` to `sleep 6` in the kill escalation is
+# red on five cases, every one of them on the clock with the message intact. Worth
+# correcting rather than reusing, because a comment that credits an assertion with the
+# wrong job is how the next reader deletes the one that was doing it.
 #
 # TOTAL_CAP_OVERRIDE / CONNECT_CAP_OVERRIDE / POLL_OVERRIDE let a single case
 # retune the wrapper without disturbing the defaults every other case shares.
 # `POLL_OVERRIDE` exists for the defect-5 case: a poll interval LONGER than a cap
 # is the whole condition under test there, and it cannot be expressed while the
 # harness pins `POLL=1`.
+#
+# THE DEFAULTS WERE 12/4 UNTIL 2026-09-01 AND ARE NOW 6/2, because the fakes hang for
+# real and the caps are therefore the suite's entire wall clock. Measured per case
+# before the change: six cases at 6.2s (CONNECT_CAP=4 plus ~2s of process overhead),
+# six at ~13.5s (TOTAL_CAP=12), everything else about 1s, 132.5s total at 2% CPU.
+# Nothing in any fake depends on real elapsed time — every one prints its whole
+# progress stream immediately and then `sleep 600`, and the `Ns elapsed` text in those
+# lines is a transcribed string, not a duration — so halving the caps changes only how
+# long the wait loop runs. What it must NOT change is the anti-vacuity margin: an early
+# kill lands at about 4s and TOTAL_CAP at about 8s, so `max_secs 6` still separates
+# them by 2s in both directions, which is why 6/2 and not 4/2.
+#
+# VENDOR_ROUND_DIR IS PER-CASE, and it has to be. The round cap counts by working
+# directory and branch, and every case here runs in this repo on one branch, so a
+# shared counter would exhaust ROUND_CAP three cases in and turn the whole rest of the
+# suite into exit 4. Per-case isolation is also the honest arrangement rather than a
+# workaround: a counter is a stateful thing across runs, so the cases that exercise it
+# are the ones below that deliberately point several runs at ONE directory.
 
 case_run() {
   # $6 is an optional substring that must be ABSENT. Only ever meaningful alongside
@@ -638,8 +676,9 @@ case_run() {
   out=$(
     PATH="$bin:$PATH" \
     CR_LOG_DIR="$logs" \
-    TOTAL_CAP="${TOTAL_CAP_OVERRIDE:-12}" \
-    CONNECT_CAP="${CONNECT_CAP_OVERRIDE:-4}" \
+    VENDOR_ROUND_DIR="$dir/rounds" \
+    TOTAL_CAP="${TOTAL_CAP_OVERRIDE:-6}" \
+    CONNECT_CAP="${CONNECT_CAP_OVERRIDE:-2}" \
     POLL="${POLL_OVERRIDE:-1}" \
     bash "$UNDER_TEST" --base main 2>&1
   )
@@ -675,12 +714,12 @@ case_run() {
   fi
 }
 
-echo "== bounded-vendor-review fixtures (TOTAL_CAP=12 CONNECT_CAP=4) =="
+echo "== bounded-vendor-review fixtures (TOTAL_CAP=6 CONNECT_CAP=2) =="
 
 # The case this script exists for. Exit 3, and FAST — under TOTAL_CAP, which is
 # what proves the early connect kill fired rather than the wall-clock backstop.
 case_run "stuck at the WebSocket connect -> exit 3, early" \
-  3 "never got past its connect phase" 11 fake_hang_at_connect
+  3 "never got past its connect phase" 6 fake_hang_at_connect
 
 # A hang is NEVER a pass. Asserted separately from the exit code because this is
 # the sentence the guard exists to make true.
@@ -697,7 +736,7 @@ case_run "stuck at connect -> says NO VENDOR REVIEW HAPPENED" \
 # connect phase" at CONNECT_CAP. That is a working review declared an outage, and
 # it was every real run for as long as the detector read the log.
 case_run "connected but slow -> TOTAL_CAP, not the connect kill" \
-  3 "produced no verdict in 12s" "" fake_healthy_but_slow
+  3 "produced no verdict in 6s" "" fake_healthy_but_slow
 
 # DEFECT 14. The same review, with its connect-phase progress line on STDERR and the
 # later phases on stdout. `cat "$out" "$err"` orders by file, so the stale line won and
@@ -706,7 +745,7 @@ case_run "connected but slow -> TOTAL_CAP, not the connect kill" \
 # must NOT print, because "produced no verdict" and "never got past its connect phase"
 # are the two ways this run can end and only one of them is true of it.
 case_run "connect line on stderr must not outrank a later one on stdout" \
-  3 "produced no verdict in 12s" "" fake_slow_with_connect_line_on_stderr \
+  3 "produced no verdict in 6s" "" fake_slow_with_connect_line_on_stderr \
   "never got past its connect phase"
 
 # The case above's mirror, and the reason both exist. The round after defect 14 asked
@@ -723,13 +762,13 @@ case_run "connect line on stderr must not outrank a later one on stdout" \
 # the `|| last=$(_last_progress_line "$err")` line — `output lacked 'never got past its
 # connect phase'`, this case and no other.
 case_run "connect line on stderr is the only evidence -> still stuck" \
-  3 "never got past its connect phase" 11 fake_hang_connect_line_on_stderr_only
+  3 "never got past its connect phase" 6 fake_hang_connect_line_on_stderr_only
 
 # DEFECT 1, still stuck, still early-killed. Logs are out of the decision now, so
 # the time bound has stopped being about them; what is load-bearing here is the
 # next case.
 case_run "two logs, both stuck -> early kill still fires" \
-  3 "never got past its connect phase" 11 fake_hang_two_logs
+  3 "never got past its connect phase" 6 fake_hang_two_logs
 
 # What defect 1's fix is FOR, now that logs only appear in the refusal: a run that
 # wrote two logs must have both named, because sending the reader to one of two
@@ -739,7 +778,7 @@ case_run "two logs -> the refusal names the second one too" \
 
 # Fail closed with nothing parseable to read. TOTAL_CAP alone must still stop it.
 case_run "no progress line -> TOTAL_CAP still stops it" \
-  3 "produced no verdict in 12s" "" fake_hang_no_progress
+  3 "produced no verdict in 6s" "" fake_hang_no_progress
 
 # DEFECT 5: NEVER SLEEP PAST A DEADLINE. The wait loop slept the full `POLL`
 # before checking either cap, and `POLL` is validated as a positive integer and
@@ -747,17 +786,17 @@ case_run "no progress line -> TOTAL_CAP still stops it" \
 # for about an hour while the script reported a 900s bound. The fifth instance in
 # one file of an advertised bound that was not the bound.
 #
-# `POLL=40` against `TOTAL_CAP=12` states the condition in the smallest possible
+# `POLL=40` against `TOTAL_CAP=6` states the condition in the smallest possible
 # form. `fake_hang_no_progress` on purpose: its verdict is `unknown`, so the early
 # kill declines and TOTAL_CAP is the ONLY thing that can stop the run, which is
 # what makes the time bound here a measurement of TOTAL_CAP rather than of the
 # connect kill happening to fire first.
 #
-# The 20s bound is the load-bearing assertion, not the exit code. Against the bare
+# The 10s bound is the load-bearing assertion, not the exit code. Against the bare
 # `sleep "$POLL"` this case exits 3 with the right wording after ~40s and passes
 # every check except that one. Seen red exactly there.
 POLL_OVERRIDE=40 case_run "POLL longer than TOTAL_CAP -> still stops at TOTAL_CAP" \
-  3 "produced no verdict in 12s" 20 fake_hang_no_progress
+  3 "produced no verdict in 6s" 10 fake_hang_no_progress
 
 # A reviewer that returns is exit 0 whatever it found, and the output passes
 # through so the caller can read the verdict.
@@ -792,7 +831,7 @@ case_run "agent-mode findings -> a verdict, not a refusal" \
 # TOTAL_CAP instead — the same wording swap as defect 4's case, so the SENTENCE is the
 # discrimination and the 11s bound proves which cap did it.
 case_run "agent-mode wedge -> the connect kill still fires" \
-  3 "never got past its connect phase" 11 fake_agent_hang
+  3 "never got past its connect phase" 6 fake_agent_hang
 
 # DEFECT 9, and it is the first FALSE REFUSAL in this file rather than a false pass.
 # `TOTAL_CAP=3 POLL=5` makes the first nap end exactly on the cap, and the fake
@@ -832,7 +871,7 @@ TOTAL_CAP_OVERRIDE=3 CONNECT_CAP_OVERRIDE=3 POLL_OVERRIDE=5 \
 n=$((passed + failed + 1))
 dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_clean "$dir/bin"
-PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" TOTAL_CAP=12 CONNECT_CAP=4 POLL=1 \
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" VENDOR_ROUND_DIR="$dir/rounds" TOTAL_CAP=6 CONNECT_CAP=2 POLL=1 \
   bash "$UNDER_TEST" --base main >"$dir/stdout" 2>"$dir/stderr"
 status=$?
 label="wrapper prose on stderr, reviewer output on stdout"
@@ -868,7 +907,7 @@ fi
 n=$((passed + failed + 1))
 dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_clean_with_stderr_noise "$dir/bin"
-PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" TOTAL_CAP=12 CONNECT_CAP=4 POLL=1 \
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" VENDOR_ROUND_DIR="$dir/rounds" TOTAL_CAP=6 CONNECT_CAP=2 POLL=1 \
   bash "$UNDER_TEST" --base main >"$dir/stdout" 2>"$dir/stderr"
 status=$?
 label="reviewer stderr stays off stdout and is not dropped"
@@ -911,7 +950,7 @@ fi
 n=$((passed + failed + 1))
 dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_slow_with_connect_line_on_stderr "$dir/bin"
-PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" TOTAL_CAP=12 CONNECT_CAP=4 POLL=1 \
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" VENDOR_ROUND_DIR="$dir/rounds" TOTAL_CAP=6 CONNECT_CAP=2 POLL=1 \
   bash "$UNDER_TEST" --base main >"$dir/stdout" 2>"$dir/stderr"
 status=$?
 label="the refusal's display is sectioned, so its last phase is readable"
@@ -978,7 +1017,7 @@ dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_hang_with_grandchild "$dir/bin"
 cpid="$dir/child.pid"; gpid="$dir/grandchild.pid"
 
-PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" \
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" VENDOR_ROUND_DIR="$dir/rounds" \
   CHILD_PIDFILE="$cpid" GRANDCHILD_PIDFILE="$gpid" \
   TOTAL_CAP=60 CONNECT_CAP=59 POLL=1 \
   bash "$UNDER_TEST" --base main >"$dir/out" 2>&1 &
@@ -1039,7 +1078,7 @@ dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_hang_with_stubborn_grandchild "$dir/bin"
 cpid="$dir/child.pid"; gpid="$dir/grandchild.pid"
 
-PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" \
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" VENDOR_ROUND_DIR="$dir/rounds" \
   CHILD_PIDFILE="$cpid" GRANDCHILD_PIDFILE="$gpid" \
   TOTAL_CAP=60 CONNECT_CAP=59 POLL=1 \
   bash "$UNDER_TEST" --base main >"$dir/out" 2>&1 &
@@ -1087,7 +1126,7 @@ for p in $child $grandchild; do kill -KILL "$p" 2>/dev/null || true; done
 # So this case does the only thing that makes the deferral visible: `POLL` LONGER THAN
 # THE WHOLE TEST TIMELINE. It asserts on the CLOCK, not just on the outcome — the two
 # scripts produce the same message and the same exit 3, and differ only in when. That
-# is a seventh shape of test blindness to go with the six in the header: not an absent
+# is a seventh shape of test blindness to go with the six before it in the defect log: not an absent
 # double, an invented signal, a merged harness, a cooperating process, or a boundary no
 # fixture landed on, but a PARAMETER every case happened to share, which collapsed the
 # very interval under test. Raised by the PR-side review on 2026-09-01.
@@ -1097,7 +1136,7 @@ dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_hang_with_grandchild "$dir/bin"
 cpid="$dir/child.pid"; gpid="$dir/grandchild.pid"
 
-PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" \
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" VENDOR_ROUND_DIR="$dir/rounds" \
   CHILD_PIDFILE="$cpid" GRANDCHILD_PIDFILE="$gpid" \
   TOTAL_CAP=120 CONNECT_CAP=119 POLL=60 \
   bash "$UNDER_TEST" --base main >"$dir/out" 2>&1 &
@@ -1146,7 +1185,7 @@ echo "== refusals =="
 n=$((passed + failed + 1))
 dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_clean "$dir/bin"
-out=$(PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" GIT_DIR=/tmp/somewhere/.git \
+out=$(PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" VENDOR_ROUND_DIR="$dir/rounds" GIT_DIR=/tmp/somewhere/.git \
   bash "$UNDER_TEST" --base main 2>&1); status=$?
 if [ "$status" -eq 2 ] && grep -qF "git location variable(s) set" <<<"$out"; then
   passed=$((passed + 1)); printf 'ok   %s\n' "GIT_DIR set -> exit 2, refuses"
@@ -1168,7 +1207,7 @@ for v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR; do
   n=$((passed + failed + 1))
   dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
   fake_clean "$dir/bin"
-  out=$(env "$v=" PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" \
+  out=$(env "$v=" PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" VENDOR_ROUND_DIR="$dir/rounds" \
     bash "$UNDER_TEST" --base main 2>&1); status=$?
   label="$v set but EMPTY -> exit 2, names $v"
   if [ "$status" -eq 2 ] && grep -qF "variable(s) set in the environment: $v" <<<"$out"; then
@@ -1324,7 +1363,7 @@ fi
 # silent acceptance reads as "bounded on connect" while having no such bound.
 n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_clean "$dir/bin"
-out=$(PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" TOTAL_CAP=10 CONNECT_CAP=99 \
+out=$(PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" VENDOR_ROUND_DIR="$dir/rounds" TOTAL_CAP=10 CONNECT_CAP=99 \
   bash "$UNDER_TEST" --base main 2>&1); status=$?
 if [ "$status" -eq 0 ] && grep -qF "can never fire" <<<"$out"; then
   passed=$((passed + 1)); printf 'ok   %s\n' "CONNECT_CAP > TOTAL_CAP -> warns it cannot fire"
@@ -1332,286 +1371,1084 @@ else
   failed=$((failed + 1)); printf 'FAIL %s (exit %s)\n' "CONNECT_CAP > TOTAL_CAP -> warns" "$status"
 fi
 
-# --- THE HEADER'S OWN ARITHMETIC ----------------------------------------------
+echo
+echo "== the round cap =="
+
+# The other bounds here bound ONE run. This one bounds the loop, so every case below
+# points SEVERAL runs at one state directory — which is why `case_run` cannot host
+# them: it gives each case its own, deliberately, so that one exhausted budget cannot
+# take the rest of the suite down with it.
 #
-# Rounds 3 and 4 of review on this file produced NOTHING BUT stale summary counts.
-# The header said "Six of the twelve had a test that should have caught them",
-# every doc said "Seven", and the enumeration those numbers summarize had EIGHT
-# items — while every individual defect entry was correct. One round earlier the
-# same thing happened to the suite's launch count: it said 16 and was 20.
+# SEEN RED, 2026-09-01, one mutation of the wrapper per case, each on that case and no
+# other unless noted — because a green test proves nothing until it has been watched to
+# fail, and this suite has shipped four cases that could not:
 #
-# The remedy applied by hand both times was to anchor the number to something
-# checkable. THIS CASE IS THAT REMEDY MADE MECHANICAL, and it is here rather than
-# in a doc because a prose rule about keeping counts honest is exactly the kind of
-# claim that has failed twice: the file already told its reader, in the paragraph
-# above the wrong number, that unanchored counts drift.
+#   the cap refuses with `exit 3`      -> the cap case, on the status
+#   claim without `set -C`             -> the race case, at 6 reviews under ROUND_CAP=1
+#   never claim a slot at all          -> the cap case AND the reset case (never counts)
+#   keep the slot unconditionally      -> the killed-review case, at exit 4
+#   delete the pre-launch write probe  -> the read-only-dir case, at exit 0
+#   ROUND_RESET deletes nothing        -> the reset case, at exit 4
+#   reset without the liveness check   -> the live-holder case, at exit 0
+#   refuse EVERY reset                 -> the live-holder case, on `force`, AND the
+#                                         plain reset case (see the overlap below)
+#   release by path, not by token      -> the ownership case, slot 1 gone
+#   drop VENDOR_ROUND_DIR from the
+#     empty-value loop                 -> the second-default case, on the wording
 #
-# It reads the numbered entries as the ONE source of truth for how many defects
-# there are, and checks the three prose claims that summarize them:
-#   A. the ordinals are contiguous 1..N — a repeated or skipped number is how
-#      "twelve entries" stays true while meaning nothing
-#   B. "<word> of them." names N
-#   C. the same-shape count plus the own-class count sums to N (ten + four)
-#   D. every "of the <number>" phrase naming a count of FOUR OR MORE names N
+# The corrupt-count mutation that used to sit in this list is gone with the counter it
+# described: admission parses no number now, so there is no value a stray byte can
+# corrupt. What replaced it is the stray-file case, which asks the question that
+# survives the change — whether anything in that directory other than a claimed slot
+# can be mistaken for state.
 #
-# The floor of four in D is measured, not guessed. The header's `of the ...`
-# phrases are three naming the defect total and one "of the two caps" — the
-# second is two rate limiters, not two defects, and no rule short of parsing
-# English separates them. Anything below four is left alone; every defect total
-# this file has ever carried has been well above it.
+# One overlap stated rather than glossed: the file-as-state-dir case and the
+# read-only-dir case both end in a refusal naming VENDOR_ROUND_DIR, so removing the
+# `mkdir -p` refusal alone leaves the write probe to catch it and neither case goes
+# red. They pin the two SENTENCES, not two independent mechanisms.
 #
-# What it deliberately does not check is WHICH defects had a test hole — "defects 3,
-# 4, and 7 through 16" is a claim about twelve specific entries and no parser settles it.
-# What check F below DOES pin is the range's upper end, because that part is not prose:
-# it is a digit, and it is the same digit as the entry count.
+# A second overlap, measured rather than predicted: "refuse EVERY reset" is red on the
+# live-holder case AND on the plain reset case, because a reset that never proceeds
+# fails the one that expects it to. That is honest rather than untidy — refuse-all is
+# the trivially-satisfying wrong fix for defect 18, and it is caught twice.
 #
-# IT WORKED, AND ON ITS FIRST REAL USE, WHICH IS WHY THIS PARAGRAPH IS PAST TENSE
-# NOW. Defect 13 landed the same day this case was written; adding the entry took
-# the case red with `13 entries but no "thirteen of them" — the total is stale`,
-# before anyone read the diff, and the fix was three summary lines the author had
-# just walked past. That message is quoted verbatim HERE and only described in the
-# script's own header, deliberately: only `^#` lines of $UNDER_TEST are scanned, so a
-# retired total living in that file would be indistinguishable from a live claim once
-# the prose is flattened, while the same words in this file are just history. One correction to the prediction that used to be written here:
-# it said B and D would BOTH go red, and only B reported. The checks are guarded on
-# `[ -z "$hdr_fail" ]` and so short-circuit on the first stale claim — which is the
-# right behaviour for a message a human acts on, but it means the case names ONE
-# thing per run and a second run is what confirms the rest. Do not read a single
-# green as proof that every claim was checked this round; read it as proof that
-# nothing was stale when the run finished. A false red here costs one reword; that
-# is the cheap direction, and it is why D flags rather than tries to be clever.
-label="header's own counts match its enumeration"
-hdr_fail=""
-# THE PROSE IS FLATTENED FIRST, and that is this case's own fail-open, caught by the
-# PR-side review the day after it was written. B, C and D greped the file LINE BY LINE
-# while the claims they check are sentences that wrap. Check D — the only one whose
-# failure is silent — therefore could not see `of the` at the end of one comment line
-# and `six` at the start of the next, and that is not hypothetical: entry 6 read "the
-# first of the six that was a genuine SILENT PASS", wrapped exactly there, stale since
-# the seventh defect landed, and every run reported green. The one claim D exists to
-# catch was present in the file and invisible to it. Measured: `grep -oiE 'of the
-# [a-z]+'` line-wise yields no `of the six`; flattened it yields one.
-#
-# Only comment lines are joined (`^#`), so code strings cannot fabricate a phrase, and
-# the leading `#` is stripped so a wrapped sentence reads as one. B and C were blind
-# the same way and in the harmless direction — a wrapped total would have read as
-# missing and gone red — but they are moved onto the flattened text too, because a
-# false red teaches the next author to reword the prose to suit the parser.
-hdr_flat=$(grep '^#' "$UNDER_TEST" | sed -e 's/^#[[:space:]]*//' | tr '\n' ' ')
-hdr_words=(zero one two three four five six seven eight nine ten eleven twelve
-           thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty)
-hdr_num_of() {  # number word -> value on stdout, empty if it is not one
-  local w i
-  w=$(tr '[:upper:]' '[:lower:]' <<<"$1")
-  for i in "${!hdr_words[@]}"; do
-    [ "${hdr_words[$i]}" = "$w" ] && { printf '%s' "$i"; return 0; }
-  done
-  return 1
+# `env "$@"` first so a case can add ROUND_CAP or ROUND_RESET without a second helper.
+round_run() {
+  local rounds="$1" bin="$2" logs="$3"; shift 3
+  env "$@" PATH="$bin:$PATH" CR_LOG_DIR="$logs" VENDOR_ROUND_DIR="$rounds" \
+    TOTAL_CAP=6 CONNECT_CAP=2 POLL=1 bash "$UNDER_TEST" --base main 2>&1
 }
 
-# (A) the enumeration itself
-# read with a loop rather than `mapfile`, which does not exist in the bash 3.2
-# that macOS ships as /bin/bash — the rest of this suite is 3.2-clean and one
-# builtin from 4.0 would make it exit 1 before reaching any assertion
+# THE CAP ITSELF. Three reviews, then a refusal — and the refusal must be exit 4 and
+# not 3, because 3 means "the vendor or the session broke, retry later" and this means
+# "another round is the wrong move, go and talk to someone". A caller that cannot tell
+# them apart will retry the one thing it must not retry.
 #
-# SCOPED TWO WAYS, because the first version scanned the whole file for any `# <n>.`
-# and would have absorbed a numbered list written anywhere in it — raised by the
-# PR-side review on 2026-09-01. The failure mode was loud rather than silent (an extra
-# ordinal breaks contiguity, or inflates N and makes B report a stale total), but the
-# message would have blamed the enumeration for a line somewhere else entirely, which
-# is defect 13's class: right status, false diagnosis. So: `awk` takes the comment
-# block that starts at the DEFECTS marker and ends at the first non-comment line, and
-# within it an entry must match the right-aligned `#  <n>. CAPS` form the entries use.
-# Both narrowings fail CLOSED — a mis-anchored scan yields too few ordinals and check A
-# says the enumeration did not read at all, which cannot be mistaken for a pass.
-#
-# Measured both ways on 2026-09-01 with `#  99. A NUMBERED COMMENT` inserted below the
-# block: the scoped scan yields `1..14` and the suite is green, the whole-file scan
-# yields `1..14 99` — a 15th ordinal that breaks contiguity and reports it against the
-# enumeration, which is the misdiagnosis this scoping exists to prevent.
-hdr_ordinals=()
-while read -r ord; do
-  hdr_ordinals+=("$ord")
-done < <(awk '/THE DEFECTS FOUND BY USING IT/{b=1} b && !/^#/{exit} b' "$UNDER_TEST" |
-         grep -oE '^#[ ]{2,3}[0-9]{1,2}\. [A-Z]' | grep -oE '[0-9]+')
-n_defects=${#hdr_ordinals[@]}
-if [ "$n_defects" -lt 2 ]; then
-  hdr_fail="parsed $n_defects numbered entries — the enumeration did not read at all"
+# The last assertion is the load-bearing one: `reviewing 3 of 3 changed file(s)` is a
+# line only the FAKE emits, so its absence is the only evidence in reach that the
+# fourth run never launched a reviewer. A cap that refuses after sending the diff has
+# already spent the thing it exists to save.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+warmup_ok=1
+for i in 1 2 3; do
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status=$?
+  [ "$status" -eq 0 ] || { warmup_ok=0; break; }
+  grep -qF "round $i of 3" <<<"$out" || { warmup_ok=0; break; }
+done
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status=$?
+label="4th review on one branch -> exit 4, nothing launched"
+if [ "$warmup_ok" -ne 1 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "a warmup round did not exit 0 and count itself"
+elif [ "$status" -ne 4 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 4"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif ! grep -qF "ROUND_CAP=3" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "refused without naming the cap it enforced"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "the reviewer ran anyway — the diff was sent"
 else
-  for i in "${!hdr_ordinals[@]}"; do
-    if [ "${hdr_ordinals[$i]}" -ne $((i + 1)) ]; then
-      hdr_fail="entry #$((i + 1)) is numbered ${hdr_ordinals[$i]} — ordinals not contiguous"
-      break
-    fi
-  done
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
 fi
-total_word=""
-[ "$n_defects" -lt "${#hdr_words[@]}" ] && total_word="${hdr_words[$n_defects]}"
-[ -z "$total_word" ] && [ -z "$hdr_fail" ] &&
-  hdr_fail="$n_defects entries is past this check's number-word table — extend it"
+cap_reached_dir="$dir/rounds"
 
-# (B) the stated total
-#
-# `([^a-z]|$)` rather than `\b`, matching the `(^|[^a-z])` on the other end. `\b` is a
-# GNU extension: POSIX ERE does not define it, and where it is unsupported it can be
-# read as a literal `b` or as a backspace, either of which makes `... of them.` miss and
-# report a stale total that is not stale. Raised by the PR-side review on 2026-09-01 as
-# a live macOS bug, and that part did NOT reproduce — measured on this machine against
-# BSD grep 2.6.0-FreeBSD (/usr/bin/grep) and ugrep 7.5.0 (the PATH grep), `of them.`
-# matched and `of themx` did not under both, so `\b` was honoured by every grep this
-# suite can actually reach here. So this is portability hardening rather than a fixed
-# defect, adopted because the character class costs nothing, behaves identically on all
-# three greps measured, and needs no assumption about which grep is first on PATH.
-if [ -z "$hdr_fail" ] && ! grep -qiE "(^|[^a-z])$total_word of them([^a-z]|\$)" <<<"$hdr_flat"; then
-  hdr_fail="$n_defects entries but no \"$total_word of them\" — the total is stale"
+# A REFUSED RUN IS NOT A ROUND, and this is the case that stops the obvious wrong
+# implementation. Counting at launch is one line shorter and lets a vendor outage
+# spend a branch's entire budget on reviews it never received — the cap would then
+# refuse a branch that has had NO review, which is this file's own oldest defect
+# pointed at the new bound. ROUND_CAP=1 so a single miscount is enough to see.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_hang_at_connect "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1); first=$?
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1); status=$?
+label="a killed review does not spend a round"
+if [ "$first" -ne 3 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "first run exited $first, wanted 3 (fixture)"
+elif [ "$status" -ne 3 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "second run exited $status, wanted 3 — the outage was counted"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
 fi
 
-# (C) same-shape + own-class = total
-if [ -z "$hdr_fail" ]; then
-  same_w=$(grep -oiE '[a-z]+ are the same' <<<"$hdr_flat" | head -1 | cut -d' ' -f1)
-  other_w=$(grep -oiE 'other [a-z]+ are their own class' <<<"$hdr_flat" | head -1 | cut -d' ' -f2)
-  if ! same_n=$(hdr_num_of "$same_w") || ! other_n=$(hdr_num_of "$other_w"); then
-    hdr_fail="could not read the same-shape/own-class split (\"$same_w\"/\"$other_w\")"
-  elif [ $((same_n + other_n)) -ne "$n_defects" ]; then
-    hdr_fail="$same_w + $other_w = $((same_n + other_n)), but there are $n_defects entries"
-  fi
+# ROUND_RESET is the escape hatch, and it must resume counting from 1 rather than
+# merely stepping past the refusal once. A reset that left the count at 3 would give
+# unlimited rounds to anyone who set it, which is an off switch by another name.
+#
+# Its own bin, pointed at the counter the cap case left exhausted. The first draft
+# borrowed case 1's bin directory to save four lines and got case 1's HANG fake, so it
+# failed at exit 3 on a case about exit 0 — a fixture reused for its path rather than
+# its behaviour, which is the cheapest way to test something other than the subject.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$cap_reached_dir" "$dir/bin" "$dir/logs" ROUND_RESET=1); status=$?
+label="ROUND_RESET=1 -> proceeds and counts from 1 again"
+if [ "$status" -ne 0 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 0"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif ! grep -qF "reset to 0" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "reset silently; an unannounced reset reads like a cap"
+elif ! grep -qF "round 1 of 3" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "did not resume counting at 1"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
 fi
 
-# (D) every "of the <four or more>" names the total
-if [ -z "$hdr_fail" ]; then
-  hdr_bad=""
-  while read -r w; do
-    [ -n "$w" ] || continue
-    v=$(hdr_num_of "$w") || continue
-    [ "$v" -ge 4 ] || continue
-    [ "$w" = "$total_word" ] || hdr_bad="$hdr_bad \"of the $w\""
-  done < <(grep -oiE 'of the [a-z]+' <<<"$hdr_flat" | cut -d' ' -f3 |
-           tr '[:upper:]' '[:lower:]' | sort -u)
-  [ -n "$hdr_bad" ] && hdr_fail="stale count phrase:$hdr_bad — wanted \"of the $total_word\""
-fi
-
-# (E) no ABSOLUTE SUITE TOTAL in the header, or in this file's own comments
+# AND THAT ESCAPE HATCH BREACHED THE CAP IT WAS CLEARING — defect 18, found by the
+# vendor leg on the round that shipped defect 17's fix, inside that fix. A reset
+# deleted slots without asking who held them, so: A holds 1 and is reviewing, a reset
+# frees 1, B claims 1 and reviews, A finishes with no verdict and its release deletes
+# what is now B's file, C claims 1 while B is still going. Three reviews under a cap
+# of one, and the operator reached it by clearing a count.
 #
-# A through D guard the DEFECT count. The header's OTHER kind of number went unguarded
-# until the PR-side review on 2026-09-01 found three of them stale in a single round —
-# three mutation results, each written as a true measurement of "N passed, one failed",
-# each falsified by the next case somebody added, none of them able to say so. That is
-# precisely the defect the four checks above exist for, sitting in the number nobody
-# thought to count. The suite's own case total is therefore written down nowhere: this
-# harness PRINTS it, which is the one form that cannot go stale.
+# THE HOLDER IS THIS SUITE. `$$` is a pid that is definitely alive and definitely not
+# a wrapper, which is the point: a fixture that backgrounded a real wrapper to hold
+# the slot would make the case depend on that wrapper's timing, and a fixture whose
+# liveness is a race can pass by arriving late. The slot is written by hand, in
+# production's own format, after a real run has created the directory.
 #
-# What survives the ban is the FAILURE count, because that is the information those
-# measurements actually carried — "one case and no other" is the discrimination being
-# claimed, and "both non-review cases, neither findings case" is a mutation matrix. The
-# passed count was only ever the arithmetic complement of the suite size at one instant.
-#
-# THREE shapes are refused, and the first version of this check saw only one of them.
-# It matched a lowercase "N passed, M failed" and the compact "N/M", scored green, and
-# was reported as proven — while the SEEN RED list at the top of THIS FILE carried a
-# dozen totals in a third shape it could not see: a pass count, then the verdict word
-# in CAPITALS, then a parenthesised "of" with the suite size and a date after it.
-# `grep -oE` is case-sensitive, and no branch of that alternation described the second
-# half at all. The shape has to be described here rather than shown, for the reason the
-# last paragraph of this comment gives.
-# So the needle was absent from the text under test, which is defect 13's anchor
-# vacuity in the check written to ban defect 13's cousin — found by the PR-side review
-# one round after this check landed, in the file the check says it scans. `-i` and an
-# `of N[,)]` branch are the fix, and the dozen entries were restated as failure counts
-# so the ban has something to hold. Banning fewer shapes than exist is a
-# half-enumerated ban, which is defect 8's shape, and this is the second time in two
-# rounds that the half-enumeration was the defect.
-#
-# IT SCANS THIS FILE'S COMMENTS TOO, which is the one place the other four checks
-# deliberately do not look: a mutation result belongs beside the case it was measured
-# on, so this file is where the next stale total will be written — three of the four
-# found in the round that added this check were in a comment rather than in the header,
-# and every one of the dozen the check itself missed was in this file. The stated cost
-# is the flattened-header cost one file over: a comment cannot QUOTE a retired total in
-# order to describe it, only describe it, which is why every mention of one in this
-# comment is spelled out in words. That cost is not theoretical — the first draft of
-# this comment quoted three retired totals, and the second quoted the very shape the
-# fix had just been written to catch. A false red costs one reword; a stale total costs
-# a reader believing a number.
-#
-# AND IT SCANS ALL FOUR GUARD SCRIPTS, not the bounded pair, which was the THIRD
-# half-enumeration in three rounds and was caught the same way as the other two — by a
-# reviewer, on the round that fixed the previous one. Scanning `$UNDER_TEST` and `$0`
-# left the preflight script and its suite outside a ban whose whole argument is that a
-# partial ban is defect 8's shape, and there were totals sitting in the preflight suite
-# while this check reported the class eliminated. The list is now every guard script in
-# `scripts/`, which is the enumeration the argument requires. One pattern in one place
-# rather than a copy of it in the preflight suite: two patterns can drift, and a drifted
-# ban is a ban with a hole in it. A missing file here reads as a clean scan, so the
-# check refuses outright if any of the four is unreadable.
-# `$HERE`, not `dirname "$0"`. The two disagree the moment the suite is invoked from
-# another directory or through a symlink, and $HERE is the absolute form this script
-# already computed once at the top for exactly that reason. With the relative form the
-# four scripts are unreadable, the refusal fires, and it reports a stale-total scan
-# problem when the actual problem is the invocation path — the WRONG-DIAGNOSIS class
-# that defect 13 is about, in the check written against defect 13's cousin. Raised by
-# the PR-side review 2026-09-01, and it never showed locally because every run of this
-# suite so far has been `./scripts/test-bounded-vendor-review.sh` from the repo root.
-if [ -z "$hdr_fail" ]; then
-  hdr_scan_dir="$HERE"
-  hdr_scan_files=""
-  for f in bounded-vendor-review.sh test-bounded-vendor-review.sh \
-           preflight-vendor-review.sh test-preflight-vendor-review.sh; do
-    if [ -r "$hdr_scan_dir/$f" ]; then
-      hdr_scan_files="$hdr_scan_files $hdr_scan_dir/$f"
-    else
-      hdr_fail="cannot read $hdr_scan_dir/$f, so the absolute-total scan would report a clean pass over a file it never opened"
-      break
-    fi
-  done
-  # shellcheck disable=SC2086  # deliberate word splitting: the list is script names we built
-  if [ -z "$hdr_fail" ]; then
-    hdr_tot=$(grep -h '^#' $hdr_scan_files |
-              grep -oiE '[0-9]{1,2} passed, [0-9]{1,2} failed|of [0-9]{1,2}[,)]|[0-9]{1,2}/[0-9]{1,2}' |
-              head -1)
-    [ -n "$hdr_tot" ] &&
-      hdr_fail="an absolute suite total (\"$hdr_tot\") is stated in a guard script comment — it goes stale on the next added case; state the failure count instead"
-  fi
-fi
-
-# (F) every quoted "7 through <n>" test-hole range ends at the entry count
-#
-# THE PR-SIDE REVIEW FOUND THIS ONE TWICE IN A SINGLE ROUND — the range quoted here and
-# the range quoted in the review-plan-v2 skill, both still ending at fourteen the day
-# after the fifteenth entry landed. A and B had already gone green on that same run,
-# because the range is a DIGIT inside a sentence and nothing above was looking at it.
-# The reason it went unguarded is written three paragraphs up in this file's own words:
-# the test-hole claim is prose, a parser for it would break more often than the claim,
-# so the whole phrase was left alone. That was true of WHICH defects the range names and
-# false of WHERE IT ENDS, which is the same mistake as a stated limit that needs no new
-# evidence to close — the fourteenth defect's lesson, arriving in the check written to
-# hold the counts this file makes about itself.
-#
-# Scoped to the four guard scripts like (E), and for the same argument: a ban that skips
-# a file is defect 8's half-enumeration. The doc-side copies of this sentence live in two
-# other repos and are outside anything this suite can read, so they are NOT covered here
-# and that is stated rather than implied — the promotion step is what keeps them honest,
-# and it is a human step. Fails CLOSED in the one direction that matters: a range that
-# cannot be found at all is not silently a pass, because the phrase is quoted in this
-# very comment, so zero matches means the scan itself broke.
-if [ -z "$hdr_fail" ]; then
-  # shellcheck disable=SC2086  # deliberate word splitting: the same list (E) built
-  hdr_ranges=$(grep -h '^#' $hdr_scan_files | grep -oE '7 through [0-9]{1,2}' |
-               grep -oE '[0-9]{1,2}$' | sort -u)
-  if [ -z "$hdr_ranges" ]; then
-    hdr_fail="found no \"7 through <n>\" range in the four guard scripts, but this file quotes one — the scan broke rather than passed"
+# The `force` half is asserted in the same case because an escape hatch nobody has
+# opened is not an escape hatch — and because refuse-while-live is trivially
+# satisfiable by refusing every reset, which this catches and the case above does not
+# (that one resets a directory whose holders have all exited).
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1); status=$?
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+label="ROUND_RESET refuses while a live pid holds a round"
+if [ "$status" -ne 0 ] || [ -z "$statedir" ] || [ ! -e "$statedir/1" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "a clean run left no claimed slot 1 (fixture)"
+else
+  printf 'pid %d token harness\n' "$$" >"$statedir/1"
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1 ROUND_RESET=1); status=$?
+  forced=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1 ROUND_RESET=force); fstatus=$?
+  if [ "$status" -ne 2 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2 — it cleared a live claim"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif ! grep -qF "still held" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "refused without saying a round was held"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif ! grep -qF "pid $$" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "did not name the holder, so nobody can check it"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "refused the reset and reviewed anyway"
+  elif [ "$fstatus" -ne 0 ] || ! grep -qF "reset to 0" <<<"$forced"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "ROUND_RESET=force exit $fstatus — the door does not open"
+    awk '{ print "       | " $0 }' <<<"$forced" | head -5
   else
-    while read -r r; do
-      [ -n "$r" ] || continue
-      [ "$r" = "$n_defects" ] ||
-        hdr_fail="a test-hole range ends at $r but the enumeration has $n_defects entries"
-    done <<<"$hdr_ranges"
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
   fi
 fi
 
-if [ -n "$hdr_fail" ]; then
-  failed=$((failed + 1)); printf 'FAIL %-56s %s\n' "$label" "$hdr_fail"
+# AND A HOLDER WE MAY NOT SIGNAL IS STILL A HOLDER. The case above holds the slot with
+# `$$`, which this suite owns, so `kill -0` answers it directly and the reset refuses.
+# That left the reachable half untested: a pid owned by ANOTHER USER answers `kill -0`
+# with EPERM, which is exit 1 — the same status as "no such process" — so the holder
+# read as dead and the reset proceeded, breaching the cap it was clearing. The comment
+# in the script named that case a round before the code handled it.
+#
+# THE HOLDER IS PID 1. Deterministic, present on every Unix, alive for the whole run,
+# and owned by root while this suite is not — which is the entire condition under test
+# and cannot be constructed from a process the suite owns. Measured 2026-09-02 on this
+# machine: `kill -0 1` exits 1 with "operation not permitted", `ps -p 1` exits 0.
+# Skipped rather than failed when the suite runs AS root, because there EPERM does not
+# arise and a green result would be vacuous — the case would be asserting that a live
+# pid reads as live, which the case above already covers.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1); status=$?
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+label="ROUND_RESET refuses for a holder it may not signal (EPERM)"
+if kill -0 1 2>/dev/null; then
+  # Reported as a SKIP and NOT counted as a pass, matching the read-only-state-dir case
+  # below. Counting it was the plainer form of the same error this file keeps recording: a
+  # check that did not run reading as one that ran and succeeded, and the suite's own total
+  # is the number this repo's summary claims are green.
+  printf 'SKIP %-56s %s\n' "$label" "running as root; EPERM is unreachable"
+elif [ "$status" -ne 0 ] || [ -z "$statedir" ] || [ ! -e "$statedir/1" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "a clean run left no claimed slot 1 (fixture)"
 else
-  passed=$((passed + 1)); printf 'ok   %s (%s entries)\n' "$label" "$n_defects"
+  printf 'pid 1 token harness\n' >"$statedir/1"
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1 ROUND_RESET=1); status=$?
+  if [ "$status" -ne 2 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2 — EPERM read as dead"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif ! grep -qF "pid 1" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "refused without naming pid 1 as the holder"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif grep -qF "reset to 0" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "said it refused and cleared the slots anyway"
+  elif [ ! -e "$statedir/1" ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "slot 1 was deleted despite the refusal"
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# AND THE SCAN AND THE DELETE ARE NOT ONE OPERATION. The two cases above both hold a
+# slot for the whole reset, so the scan sees the holder and refuses. Neither lands in the
+# gap BETWEEN the scan and the delete, which is where a wrapper claims a slot the reset
+# is about to remove — after which a third wrapper takes that same name while the second
+# is still reviewing. The scan is honest, the delete is honest, and the gap is the defect.
+#
+# THE FIXTURE IS THE MARKER, NOT THE RACE. Landing a real wrapper inside a window this
+# narrow is a coin flip, and a fixture whose liveness is a race passes by arriving late —
+# the reason the case above holds its slot by hand rather than by timing. So this asserts
+# the mechanism that closes the gap instead of trying to hit it: with `.resetting` present
+# and owned by a live pid, a claim must be REFUSED (exit 2, nothing counted, no review),
+# and with `.resetting` owned by a dead pid it must be taken over rather than obeyed —
+# because a reset that dies mid-way would otherwise wedge every future run, which is the
+# failure this branch is named after. Both directions, because refusing on sight satisfies
+# the first assertion and is the trivially-wrong fix.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); status=$?
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+label="a claim mid-reset is refused, and a dead marker is taken over"
+if [ "$status" -ne 0 ] || [ -z "$statedir" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "a clean run left no state dir (fixture)"
+else
+  # Live marker: this suite is the holder, for the same reason as the case above.
+  printf 'pid %d\n' "$$" >"$statedir/.resetting"
+  live_out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); live_status=$?
+  # Dead marker: a pid that cannot exist, so the takeover path is the only one left.
+  printf 'pid 999999\n' >"$statedir/.resetting"
+  dead_out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); dead_status=$?
+  if [ "$live_status" -ne 2 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exit $live_status, wanted 2 — claimed during a reset"
+    awk '{ print "       | " $0 }' <<<"$live_out" | head -5
+  elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$live_out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "refused and reviewed anyway"
+  elif ! grep -qF "ROUND_RESET is in progress" <<<"$live_out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "refused without saying a reset was in flight"
+    awk '{ print "       | " $0 }' <<<"$live_out" | head -5
+  elif [ "$dead_status" -ne 0 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exit $dead_status on a DEAD marker — a wedge, not a gate"
+    awk '{ print "       | " $0 }' <<<"$dead_out" | head -5
+  elif ! grep -qF "stale reset marker" <<<"$dead_out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "took the marker over without saying so"
+    awk '{ print "       | " $0 }' <<<"$dead_out" | head -5
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# AND THE RELEASE IS THE SAME BREACH FROM THE OTHER END. `rm -f "$round_claim"`
+# deletes whatever is at that name at exit, which after a `ROUND_RESET=force` is
+# another wrapper's live claim — so the refusal above closes the reset half and this
+# closes the release half. One without the other leaves the hole reachable.
+#
+# The sequence is deterministic rather than raced: a hanging wrapper claims slot 1,
+# the suite waits for the file to exist and then overwrites it with a foreign token,
+# and the wrapper is killed at CONNECT_CAP with no verdict — which is exactly the
+# path that releases. What survives the exit is the assertion.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_hang_at_connect "$dir/bin"
+label="a release deletes its own slot, not whatever holds that name"
+( round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1 >"$dir/hang.log" 2>&1 ) &
+hang_pid=$!
+statedir=''
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+  [ -n "$statedir" ] && [ -e "$statedir/1" ] && break
+  sleep 0.1
+done
+if [ -z "$statedir" ] || [ ! -e "$statedir/1" ]; then
+  wait "$hang_pid" 2>/dev/null || true
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "the hanging wrapper never claimed a slot (fixture)"
+else
+  printf 'pid %d token intruder\n' "$$" >"$statedir/1"
+  wait "$hang_pid" 2>/dev/null || true
+  if [ ! -e "$statedir/1" ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "deleted a slot it no longer owned"
+  elif ! grep -qF 'token intruder' "$statedir/1"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "the slot survived but its holder did not"
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# ONLY `1` AND `force` MAY CLEAR A BRANCH'S SLOTS, AND THE VALUE THAT PROVES IT IS `0`.
+# Until this round every non-empty ROUND_RESET was a reset request, so `ROUND_RESET=0` —
+# which reads as "off" to whoever writes it, and is how every other switch on this machine
+# spells "off" — deleted the branch's claims and let the cap start over. So did `=yes` and
+# every typo. That is this file's own recurring defect once more, in the one place where
+# guessing DELETES state rather than merely mis-reporting it.
+#
+# Three probes, because each of the two available wrong fixes passes a smaller case. The
+# anchor is the SENTENCE and never the token (defect 13): the accepting version prints
+# `ROUND_RESET set — round count ... reset to 0`, which contains `ROUND_RESET` as readily
+# as the refusal does, so `is not a reset request` is what is greped and the surviving slot
+# file is what is checked. And `ROUND_RESET=` must stay OFF rather than join the caps'
+# set-but-empty refusal — an empty cap silently drops a bound the operator tried to set,
+# while an empty reset does what the operator's `=` reads as. That asymmetry is argued in
+# the script and was untested until now, so "refuse everything that is not 1 or force" is
+# red here instead of green.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1); status=$?
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+label="ROUND_RESET=0 is refused, and an empty one is still off"
+if [ "$status" -ne 0 ] || [ -z "$statedir" ] || [ ! -e "$statedir/1" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "a clean run left no claimed slot 1 (fixture)"
+else
+  zero_out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1 ROUND_RESET=0); zero_status=$?
+  zero_kept=0; [ -e "$statedir/1" ] && zero_kept=1
+  typo_out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1 ROUND_RESET=yes); typo_status=$?
+  # ROUND_CAP=2 for the empty probe so there is a free slot to claim: slot 1 is still
+  # held by the warmup's verdict, and reclaiming a dead holder's slot is exactly what
+  # ROUND_RESET exists for, so a cap of 1 here would exit 4 for the right reason and
+  # tell us nothing about the empty value.
+  off_out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=2 ROUND_RESET=); off_status=$?
+  if [ "$zero_status" -ne 2 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "ROUND_RESET=0 exit $zero_status, wanted 2"
+    awk '{ print "       | " $0 }' <<<"$zero_out" | head -5
+  elif ! grep -qF "is not a reset request" <<<"$zero_out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "refused without saying the value is not a reset"
+    awk '{ print "       | " $0 }' <<<"$zero_out" | head -5
+  elif grep -qF "reset to 0" <<<"$zero_out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "said it refused and cleared the branch anyway"
+  elif [ "$zero_kept" -ne 1 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "ROUND_RESET=0 deleted a claimed slot"
+  elif [ "$typo_status" -ne 2 ] || ! grep -qF "is not a reset request" <<<"$typo_out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "ROUND_RESET=yes exit $typo_status — a typo resets"
+    awk '{ print "       | " $0 }' <<<"$typo_out" | head -5
+  elif [ "$off_status" -ne 0 ] || ! grep -qF "round 2 of 2" <<<"$off_out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "ROUND_RESET= exit $off_status — empty is not off"
+    awk '{ print "       | " $0 }' <<<"$off_out" | head -5
+  elif ! grep -qF "reviewing 3 of 3 changed file(s)" <<<"$off_out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "an empty reset was counted but never reviewed"
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# AND TAKING OVER A STALE MARKER IS NOT AN OVERWRITE. The first repair of defect 20 wrote
+# straight over a marker it had judged stale, so two resets that both judged it stale both
+# proceeded — and then the first one's delete removed the second one's marker and left it
+# scanning with the claim loop open, which is defect 20 reached through its own fix. The
+# remove-and-re-create is exclusive, and the case is that the re-create can be LOST.
+#
+# Deterministic rather than raced: a no-op `rm` first on PATH makes the remove half do
+# nothing, so the exclusive create must fail on a file that is still there — the same
+# state a racing reset would leave, arrived at by arithmetic instead of by timing. The
+# marker's pid cannot exist, so the takeover path is the only one reachable; `cannot be
+# replaced` is greped rather than `stale`, because the SUCCESS note says "took over a
+# stale reset marker" and would satisfy the looser anchor.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1); status=$?
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+label="a lost re-create of the reset marker refuses, not overwrites"
+if [ "$status" -ne 0 ] || [ -z "$statedir" ] || [ ! -e "$statedir/1" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "a clean run left no claimed slot 1 (fixture)"
+else
+  printf 'pid 999999 token someone-else\n' >"$statedir/.resetting"
+  printf '#!/bin/sh\nexit 0\n' >"$dir/bin/rm"
+  chmod +x "$dir/bin/rm"
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1 ROUND_RESET=1); status=$?
+  if [ "$status" -ne 2 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2 — it overwrote the marker"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif ! grep -qF "cannot be replaced" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "refused without saying the marker could not be taken"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif grep -qF "reset to 0" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "said it refused and cleared the branch anyway"
+  # NO SLOT-SURVIVAL ASSERTION HERE, and its absence is deliberate rather than an oversight.
+  # The no-op `rm` above is first on PATH for the whole wrapper run, so `[ -e "$statedir/1" ]`
+  # cannot go red whatever the script does — the fixture that makes this case deterministic
+  # has also removed that assertion's ability to fail, which is precisely the vacuity shape
+  # this suite hunts everywhere else. The reset block's own cases assert slot survival with a
+  # real `rm` on PATH; the only honest observables here are the status, the wording, and the
+  # absence of a review.
+  elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "refused the reset and reviewed anyway"
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# AND THE END OF A RESET DROPS ITS OWN MARKER, NOT WHATEVER HOLDS THAT NAME. This is the
+# release case's ownership test one file over, and it is what makes the two syscalls
+# between the create and the trap harmless rather than merely narrow: if a second reset
+# does replace this marker, ITS marker is the one standing, so SOME marker exists for the
+# union of both resets and the claim loop stays shut for as long as either runs. A path
+# delete breaks that invariant; an ownership delete cannot.
+#
+# Entered deterministically rather than raced, by shimming the one command the reset runs
+# between its create and its drop: `seq`, on the slot scan. The shim plants a marker owned
+# by this suite — LIVE, so the claim loop below must refuse rather than tidy it away as
+# stale, which is the observable that separates the two implementations.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); status=$?
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+label="the reset drops its own marker, not a racing reset's"
+if [ "$status" -ne 0 ] || [ -z "$statedir" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "a clean run left no state dir (fixture)"
+else
+  : >"$statedir/.resetting.armed"
+  cat >"$dir/bin/seq" <<'EOF'
+#!/bin/sh
+# Fires once, on the reset's slot scan. `seq` is emulated rather than exec'd because this
+# directory is first on PATH, so resolving the real one from here would find this file.
+if [ -n "${HARNESS_GATE:-}" ] && [ -f "$HARNESS_GATE.armed" ]; then
+  rm -f "$HARNESS_GATE.armed"
+  printf 'pid %d token intruder\n' "$HARNESS_PID" >"$HARNESS_GATE"
+fi
+i=$1
+while [ "$i" -le "$2" ]; do echo "$i"; i=$((i + 1)); done
+EOF
+  chmod +x "$dir/bin/seq"
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3 ROUND_RESET=1 \
+    HARNESS_GATE="$statedir/.resetting" HARNESS_PID=$$); status=$?
+  if [ -f "$statedir/.resetting.armed" ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "the seq shim never fired, so no marker was planted (fixture)"
+  elif ! grep -qF "reset to 0" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "the reset itself did not run (fixture)"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif [ ! -e "$statedir/.resetting" ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "deleted a marker it did not own"
+  elif ! grep -qF 'token intruder' "$statedir/.resetting"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "the marker survived but its owner did not"
+  elif [ "$status" -ne 2 ] || ! grep -qF "ROUND_RESET is in progress" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exit $status — claimed a round with a live marker up"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# AND THE CLAIM SIDE MUST NOT TOUCH THE MARKER AT ALL. The two cases above are the reset
+# side of this argument; this is the side that READS the marker, and it kept a delete for
+# two rounds after the reset side gave one up — first by path, then guarded by a re-read,
+# which was narrower and not closed, because no gap between the last read and an `rm` can
+# be made zero in POSIX shell. So the mechanism under test is no longer "delete the right
+# one", it is "do not delete", and this case asserts the half that a verdict still rests
+# on: a marker that changed hands between the liveness test and the re-read means a reset
+# is live NOW, and the claim must be refused rather than made on an expired verdict.
+#
+# Deterministic rather than raced, by shimming the one command that runs in that gap: the
+# stale pid sends `pid_is_live` past `kill -0` to `ps -p`, so the shim fires there, plants a
+# marker owned by a LIVE pid, and then answers "gone" so the stale verdict still stands.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); status=$?
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+label="a stale marker that changes hands before the re-read refuses"
+if [ "$status" -ne 0 ] || [ -z "$statedir" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "a clean run left no state dir (fixture)"
+else
+  printf 'pid 999999 token stale-one\n' >"$statedir/.resetting"
+  : >"$statedir/.resetting.armed"
+  cat >"$dir/bin/ps" <<'EOF'
+#!/bin/sh
+# Fires once, inside pid_is_live's second opinion — i.e. after the marker has been read and
+# before the verdict is acted on. Then answers 1, the only status that means "gone", so the
+# wrapper's stale verdict is unchanged and the expiry of it is the only thing under test.
+if [ -n "${HARNESS_GATE:-}" ] && [ -f "$HARNESS_GATE.armed" ]; then
+  rm -f "$HARNESS_GATE.armed"
+  printf 'pid %d token intruder\n' "$HARNESS_PID" >"$HARNESS_GATE"
+  exit 1
+fi
+for real in /bin/ps /usr/bin/ps; do
+  [ -x "$real" ] && exec "$real" "$@"
+done
+exit 1
+EOF
+  chmod +x "$dir/bin/ps"
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3 \
+    HARNESS_GATE="$statedir/.resetting" HARNESS_PID=$$); status=$?
+  if [ -f "$statedir/.resetting.armed" ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "the ps shim never fired, so nothing changed hands (fixture)"
+  elif [ ! -e "$statedir/.resetting" ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "deleted a live reset's marker"
+  elif ! grep -qF 'token intruder' "$statedir/.resetting"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "the marker survived but its owner did not"
+  elif [ "$status" -ne 2 ] || ! grep -qF "changed hands" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exit $status — claimed on a verdict that had expired"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "refused and reviewed anyway"
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# AND A MARKER THAT CHANGES HANDS AFTER THE LAST READ IS THE CASE THE OLD DESIGN COULD
+# NOT SURVIVE. The case above lands in the gap the re-read closes; this one lands in the gap
+# the re-read cannot close, because it opens the instant the re-read returns. Under a delete
+# — by path or guarded by content, it makes no difference here, since the content the guard
+# compares is the content that was there when it read — the wrapper unlinks a LIVE reset's
+# marker and the claim loop is then open to every other wrapper for as long as that reset
+# scans. Under no delete there is nothing left to be wrong: the intruder's marker stands, and
+# this claim proceeds, which is the same thing as a claim made a moment earlier and is what
+# the reset's own live-slot refusal is there to catch.
+#
+# So the assertion is the marker, not the exit. Deterministic by shimming the read itself:
+# `cat` is external, the claim path reads the marker exactly twice, and the shim passes the
+# first through and replaces the file immediately after serving the SECOND — which is the
+# re-read — so the wrapper is past every look it will ever take when the file changes.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); status=$?
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+label="a marker replaced after the final read survives the claim"
+if [ "$status" -ne 0 ] || [ -z "$statedir" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "a clean run left no state dir (fixture)"
+else
+  printf 'pid 999999 token stale-one\n' >"$statedir/.resetting"
+  cat >"$dir/bin/cat" <<'EOF'
+#!/bin/sh
+# Only the marker, and only its SECOND read. Serves what is there, then replaces it, so the
+# wrapper's comparison passes on the content it was given and the file changes hands with
+# every read already behind it. Everything else is the real cat, because the slot files and
+# the reviewer's captures go through here too.
+last=''
+for a in "$@"; do last="$a"; done
+case "$last" in
+  *.resetting)
+    n=0
+    [ -f "$HARNESS_COUNT" ] && n="$(/bin/cat "$HARNESS_COUNT")"
+    n=$((n + 1)); printf '%s\n' "$n" >"$HARNESS_COUNT"
+    /bin/cat "$last" 2>/dev/null
+    [ "$n" -eq 2 ] && printf 'pid %d token intruder\n' "$HARNESS_PID" >"$last"
+    exit 0
+    ;;
+esac
+for real in /bin/cat /usr/bin/cat; do
+  [ -x "$real" ] && exec "$real" "$@"
+done
+exit 1
+EOF
+  chmod +x "$dir/bin/cat"
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3 \
+    HARNESS_COUNT="$dir/reads" HARNESS_PID=$$); status=$?
+  reads=0; [ -f "$dir/reads" ] && reads="$(cat "$dir/reads")"
+  if [ "$reads" -lt 2 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "$reads read(s) of the marker — the re-read never happened (fixture)"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif [ ! -e "$statedir/.resetting" ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "deleted a live reset's marker planted after the last read"
+  elif ! grep -qF 'token intruder' "$statedir/.resetting"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "the marker survived but its owner did not"
+  elif [ "$status" -ne 0 ] || ! grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exit $status — a stale marker must be ignored, not obeyed"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# A STRAY FILE IN THE STATE DIRECTORY CANNOT SWITCH THE CAP OFF. This case replaced
+# "a corrupt count refuses rather than reading as 0" when admission stopped parsing a
+# number: there is no count to corrupt now, only slots to claim, so the question
+# changed from "does garbage fail closed" to "can garbage be mistaken for state at
+# all". A file named `banana` is ignored and the cap still fires on the fourth run; a
+# file named `2` would be a claimed slot and hence over-refusal, which is the
+# direction this file always chooses.
+#
+# The state directory is found with a glob rather than recomputed, for the reason the
+# old case gave and which still holds: rebuilding the cksum key here would be a second
+# copy of production logic inside the test that verifies it, and a drifted copy would
+# agree with itself and with nothing else.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status=$?
+label="a stray file in the state dir is ignored, not read as state"
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+if [ "$status" -ne 0 ] || [ -z "$statedir" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "no state dir was created by a clean run (fixture)"
+else
+  printf 'banana\n' >"$statedir/banana"
+  round_ok=1
+  for i in 2 3; do
+    out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status=$?
+    [ "$status" -eq 0 ] || { round_ok=0; break; }
+  done
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status=$?
+  if [ "$round_ok" -ne 1 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "the stray file cost a legitimate round"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif [ "$status" -ne 4 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "4th run exit $status, wanted 4"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# TWO WRAPPERS, ONE ROUND, AND EXACTLY ONE OF THEM MAY HAVE IT. Admission used to be
+# three steps with a vendor review in the middle — read the count, compare it, write it
+# back afterwards — so N concurrent runs all read the same number, all passed the same
+# test, and all sent a diff. The PR-side review on 2026-09-01 found it. The bound said
+# three and the machine could do six, which is this file's signature defect in the very
+# block written to stop the review loop.
+#
+# SIX AT ONCE AGAINST ROUND_CAP=1, not two, because a two-way race can be won by luck
+# on a non-atomic implementation and read as a pass; six cannot. And concurrency is the
+# ORDINARY case on this machine rather than a tail risk — defect 1 exists because two
+# gates ran at once and it was measured — so this is the condition the cap operates
+# under, not an exotic one.
+#
+# The assertion is a COUNT of statuses and not "the last one refused", because the
+# failure being tested is several runs succeeding, and any assertion that looks at one
+# run cannot see it.
+#
+# WHAT THIS CASE CAN AND CANNOT SEE, measured 2026-09-01 rather than assumed, because
+# the first mutation written to prove it load-bearing came back GREEN. Replacing the
+# O_EXCL claim with `[ ! -e ] && write` — a TOCTOU window a few instructions wide —
+# does not fail here: six wrappers started from a `for` loop are milliseconds apart,
+# so they never land inside it. What IS red is the admission this replaced: count the
+# claimed slots, run the whole vendor review, write the slot afterwards. Six of six got
+# a review under ROUND_CAP=1, because that window is the length of a review rather than
+# of an instruction, and that is the defect the PR-side reviewer actually reported.
+# So: this case discriminates a review-wide race and does NOT discriminate an
+# instruction-wide one. Stated because a case whose reach is unmeasured reads as
+# covering both, and the O_EXCL is kept on argument rather than on this evidence.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs" "$dir/out"
+fake_clean "$dir/bin"
+label="six wrappers racing for one round -> exactly one wins"
+for i in 1 2 3 4 5 6; do
+  ( round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=1 >"$dir/out/$i.log" 2>&1
+    printf '%d\n' "$?" >"$dir/out/$i.status" ) &
+done
+wait
+zeros=0; fours=0; others=''
+for i in 1 2 3 4 5 6; do
+  st="$(cat "$dir/out/$i.status" 2>/dev/null)"
+  case "$st" in
+    0) zeros=$((zeros + 1)) ;;
+    4) fours=$((fours + 1)) ;;
+    *) others="${others:+$others }$st" ;;
+  esac
+done
+if [ -n "$others" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "unexpected status(es): $others"
+  awk '{ print "       | " $0 }' "$dir/out/1.log" | head -5
+elif [ "$zeros" -ne 1 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "$zeros of 6 got a review under ROUND_CAP=1"
+elif [ "$fours" -ne 5 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "$fours refusals, wanted 5"
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+fi
+
+# ROUND_CAP=0 is refused, and the WORDING is the assertion. The numeric loop for the
+# caps says "a whole number of seconds", which is false about a count of reviews, and
+# both messages contain the string `ROUND_CAP` — so greping for the variable name
+# would score green on the wrong refusal. That is the anchor vacuity from the sibling
+# guard's twelfth round and defect 13 here, and it is cheap to avoid: reject the token
+# that only the wrong message can contain.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=0); status=$?
+label="ROUND_CAP=0 -> exit 2, and not as a duration"
+if [ "$status" -ne 2 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif grep -qF "seconds" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "called a review count a duration"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif ! grep -qF "greater than 0" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "refused without saying what it wanted"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+fi
+
+# THE TWO NEW VARIABLES TAKE `${VAR-default}` AND MUST REFUSE AN EMPTY VALUE LIKE THE
+# FIVE THAT PRECEDED THEM. Defect 3 was `${VAR:-default}` handing the default to an
+# explicitly empty value, so a bound the operator tried to set silently was not one —
+# and its own fix was half-enumerated at first: five variables had the hole and the
+# suite probed one. Adding two more variables in the same form without adding their two
+# cases would be that same half-enumeration, one round later, which is why these exist
+# rather than resting on "it uses the same loop".
+#
+# The anchor is the SENTENCE, not the variable name (defect 13, and the sibling guard's
+# twelfth round): every one of these refusals prints `VENDOR_ROUND_DIR` somewhere,
+# including the two that have nothing to do with an empty value, so a bare-name grep
+# would score green on the wrong refusal.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=); status=$?
+label="rejects ROUND_CAP=, and not as a duration"
+if [ "$status" -ne 2 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif grep -qF "seconds" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "called a review count a duration"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif ! grep -qF "ROUND_CAP must be a whole number of reviews" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "did not name ROUND_CAP as what it rejected"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+fi
+
+# `round_run` sets VENDOR_ROUND_DIR itself and `env` lets the LAST assignment win, so
+# this case cannot go through the helper — passing an empty value as an extra argument
+# would be silently overwritten and the case would assert nothing. That is the shared-knob
+# vacuity (defect 11) turned inside out: a helper that fixes the variable under test.
+#
+# STATED PLAINLY, because the mutation showed it: this refusal is defence in depth and
+# not the only barrier. Delete VENDOR_ROUND_DIR from the generic empty-value loop and an
+# empty value still refuses at the write probe with exit 2 — it just blames writability
+# instead of the empty value, which is defect 13's shape (a right status with a wrong
+# diagnosis) rather than a pass. So the assertion is on the SENTENCE for a second reason:
+# the status alone cannot tell the two apart.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(env VENDOR_ROUND_DIR= PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" \
+  TOTAL_CAP=6 CONNECT_CAP=2 POLL=1 bash "$UNDER_TEST" --base main 2>&1); status=$?
+label="rejects VENDOR_ROUND_DIR=, naming it"
+if [ "$status" -ne 2 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif ! grep -qF "VENDOR_ROUND_DIR is set but empty" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "refused without naming the empty variable"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "launched the reviewer anyway"
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+fi
+
+# A COUNTER THAT CANNOT BE WRITTEN REFUSES BEFORE THE LAUNCH, not after it. Proceeding
+# uncounted is a bound switched off by a filesystem condition (defect 3's shape, where
+# two concurrent logs disabled the connect kill); refusing AFTER the review would print
+# a refusal over a review that happened (defect 9's shape). So the probe is early, and
+# the assertion that pins it is again the fake's own line being absent. `$dir/rounds`
+# is a regular FILE here, so `mkdir -p` cannot succeed.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+: >"$dir/rounds"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status=$?
+label="unwritable counter -> exit 2 before any launch"
+if [ "$status" -ne 2 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif ! grep -qF "VENDOR_ROUND_DIR" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "refused without saying which variable fixes it"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "launched the reviewer and refused afterwards"
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+fi
+
+# AN EMPTY ROUND-KEY HASH IS ONE BUCKET FOR EVERY BRANCH, NOT A DEGRADED KEY. The
+# design note above the round cap enumerated `pwd -P` (a builtin, cannot fail) and
+# `git rev-parse` (fails to `no-branch`, which over-refuses within ONE directory),
+# and stopped there — while the line building the state directory ran a third
+# external command whose failure merges every directory and branch into a single
+# budget. A branch that has had no review then refuses with exit 4, "out of rounds",
+# which is a wrong verdict rather than a late one: the write probe's own shape, two
+# lines above the write probe. Half-enumerated failure paths, in the block added to
+# stop this file's list from growing.
+#
+# WHAT THE DOUBLE MODELS AND WHAT IT DOES NOT. A stub `cksum` that exits 127 with no
+# stdout produces byte-for-byte what an absent `cksum` produces at this expansion —
+# empty output — which is the condition under test. It does NOT model an absent
+# `cksum` for anything else in the script, and nothing else uses it. Prepending the
+# stub is the only way to do this from inside the harness at all: `$dir/bin` goes on
+# the FRONT of PATH, so there is no subtracting a command from it here, and a shim
+# farm like the template CI step's is a different fixture entirely. A restricted PATH
+# would also drop `tr` and `cut` and refuse for a reason with nothing to do with the
+# hash, which is the shim-floor defect this same round fixes in that workflow.
+#
+# The assertion is on the SENTENCE, and specifically on it naming `cksum`, because
+# exit 2 alone cannot tell this refusal from the four other exit 2s within twenty
+# lines of it, and a refusal that does not name the command sends the operator to
+# VENDOR_ROUND_DIR, which is not the problem. Defect 13's shape.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs" "$dir/rounds"
+fake_clean "$dir/bin"
+printf '#!/bin/sh\nexit 127\n' >"$dir/bin/cksum"; chmod +x "$dir/bin/cksum"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status=$?
+label="an empty round-key hash refuses, naming cksum"
+if [ "$status" -ne 2 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif ! grep -qF "could not hash the round key" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "refused, but not on the hash"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif ! grep -qF "cksum" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "did not name the command that could not run"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif [ -d "$dir/rounds/.rounds" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "built the shared-bucket state dir anyway"
+elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "launched the reviewer uncounted"
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+fi
+
+# A COLLIDING KEY HAS TO SURVIVE THE NEXT RUN, or the `key` file is a diagnostic that
+# reads the same whether or not the thing it diagnoses happened. The write was a plain
+# `>` until 2026-09-02, so the second key overwrote the first: an operator inspecting
+# `key` after an unexplained exit 4 saw one key — their own — which is byte-for-byte
+# what a non-colliding directory shows. The verdict was right and the artifact for
+# checking it was silently the wrong artifact, which is defect 16's class.
+#
+# A REAL HASH COLLISION CANNOT BE CONSTRUCTED HERE, so the foreign key is PLANTED. That
+# is a substitution and it is named rather than glossed: what this case cannot show is
+# that two genuinely colliding keys reach the same directory (that is `cksum`'s
+# business, not this script's), and what it does show is the only part this script
+# decides — that an existing key is preserved, that ours joins it, that the operator is
+# told the budget is shared, and that a third run does not append a duplicate. The last
+# of those is why the check is membership and not "differs from the file": the obvious
+# comparison appends on every run once two keys are present, and a file growing without
+# bound is how this stops being readable a second time. The third run is what makes the
+# membership form load-bearing rather than a style choice.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+key_ok=1
+round_run "$dir/rounds" "$dir/bin" "$dir/logs" >/dev/null 2>&1 || key_ok=0
+key_file=$(find "$dir/rounds" -maxdepth 2 -name key -type f 2>/dev/null | head -n1)
+label="a colliding key survives, and is not re-appended"
+if [ "$key_ok" -ne 1 ] || [ -z "$key_file" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "the warmup round did not leave a key file (fixture)"
+else
+  printf '%s\n' "/some/other/checkout@@other-branch" >>"$key_file"
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status=$?
+  before=$(grep -c '' "$key_file")
+  out2=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status2=$?
+  after=$(grep -c '' "$key_file")
+  if [ "$status" -ne 0 ] || [ "$status2" -ne 0 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "runs exited $status/$status2, wanted 0 (fixture)"
+  elif ! grep -qxF "/some/other/checkout@@other-branch" "$key_file"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "the foreign key was overwritten — a collision reads as its absence"
+  elif [ "$before" -ne 2 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "key holds $before lines after the collision, wanted 2"
+    awk '{ print "       | " $0 }' "$key_file" | head -5
+  elif ! grep -qF "budget is SHARED" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "shared budget went unreported"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif ! grep -qF "budget is SHARED" <<<"$out2"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "reported once and then went quiet — the run that sees exit 4 is a later one"
+  elif [ "$after" -ne 2 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "key grew to $after lines on a repeat run — not membership"
+    awk '{ print "       | " $0 }' "$key_file" | head -5
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# AND THE COUNT IS OVER DISTINCT KEYS, WHICH THE CASE ABOVE CANNOT SEE because every key
+# it plants is a different one. The check-and-append is two steps and this script admits
+# concurrent wrappers by design — the six-way race case above is one — so two arriving
+# together both find the key absent and both append it. A LINE count then reports a
+# shared budget over one key present twice: a false positive indistinguishable from the
+# real reading, on the one artifact that exists to tell them apart.
+#
+# THE DUPLICATE IS PLANTED RATHER THAN RACED, and that substitution is the point rather
+# than a shortcut. A race that must interleave two processes inside a two-line window is
+# the flakiest possible fixture, and the state it produces — one key, twice — is
+# reachable by `head -n1` in one line. What this cannot show is that the race happens;
+# what it does show is that the state the race leaves behind is not read as a collision,
+# which is the only harm the race had.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+dup_ok=1
+round_run "$dir/rounds" "$dir/bin" "$dir/logs" >/dev/null 2>&1 || dup_ok=0
+key_file=$(find "$dir/rounds" -maxdepth 2 -name key -type f 2>/dev/null | head -n1)
+label="a duplicated key line is not read as a collision"
+if [ "$dup_ok" -ne 1 ] || [ -z "$key_file" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "the warmup round did not leave a key file (fixture)"
+else
+  head -n1 "$key_file" >>"$key_file.tmp" && cat "$key_file.tmp" >>"$key_file"
+  rm -f "$key_file.tmp"
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status=$?
+  lines=$(grep -c '' "$key_file")
+  if [ "$status" -ne 0 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exited $status, wanted 0 (fixture)"
+  elif [ "$lines" -ne 2 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "key holds $lines lines, wanted the 2 planted (fixture)"
+  elif grep -qF "budget is SHARED" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "one key twice was reported as a shared budget"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# TWO REFUSALS, TWO SENTENCES, AND THE CASE ABOVE ONLY REACHES ONE OF THEM. Making
+# `$dir/rounds` a file fails at `mkdir -p`; the per-branch state directory INSIDE it,
+# existing and read-only, gets past mkdir and fails at the write probe, which is the
+# line whose whole purpose is to move a discoverable-at-the-end failure to before the
+# launch. Asserting the mkdir message and calling the probe covered would be a
+# near-miss reading as coverage — defect 10's test hole, the most expensive kind here.
+#
+# THE PROBE IS LOAD-BEARING FOR A REASON THIS CASE NOW EXERCISES DIRECTLY. Admission
+# is an O_EXCL create, and a failed `set -C` redirect cannot say WHY it failed: EEXIST
+# means the slot is claimed and the cap is real, EACCES means nothing could be claimed
+# and the cap has no idea. Without the probe every slot would fail to open and the
+# refusal would be exit 4, "this branch is out of rounds", over a branch that has had
+# none. So the first run below claims slot 1 legitimately; the directory is made
+# read-only after it; and the second run must refuse on the WRITE, not on the cap.
+#
+# Skipped rather than faked when running as root, where chmod cannot make anything
+# unwritable. A skip printed out loud is honest; a case that quietly cannot fail is
+# not, and this suite has shipped four of those.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs" "$dir/rounds"
+fake_clean "$dir/bin"
+label="read-only state dir -> the write probe refuses, early"
+if [ "$(id -u)" -eq 0 ]; then
+  printf 'SKIP %-56s %s\n' "$label" "running as root; chmod cannot make it unwritable"
+else
+  round_run "$dir/rounds" "$dir/bin" "$dir/logs" >/dev/null 2>&1
+  statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+  status=0
+  out=''
+  if [ -n "$statedir" ]; then
+    chmod 500 "$statedir"
+    out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs"); status=$?
+    chmod 700 "$statedir"
+  fi
+  if [ -z "$statedir" ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "no state dir after a clean run (fixture)"
+  elif [ "$status" -ne 2 ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif ! grep -qF "cannot write" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "refused, but not on the write probe"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "launched the reviewer and refused afterwards"
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# THE SECOND HOME-DERIVED DEFAULT. `ROUND_DIR` was added on the same `${HOME:+...}`
+# expansion as `LOG_DIR`, and with CR_LOG_DIR set explicitly it is the ONLY one an
+# absent HOME can break — which is a state the existing HOME case cannot reach, since
+# it leaves CR_LOG_DIR unset and refuses on that one first. Without this case a
+# refusal blaming "VENDOR_ROUND_DIR is set but empty" would score green, and that
+# sentence is false in cron twice over: it is not set, and unsetting it changes
+# nothing. Exactly defect 13, one variable later.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+out=$(env -u HOME CR_BIN=true CR_LOG_DIR="$dir/logs" bash "$UNDER_TEST" 2>&1); status=$?
+label="HOME unset + CR_LOG_DIR set -> blames VENDOR_ROUND_DIR"
+if [ "$status" -ne 2 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "exit $status, wanted 2"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif ! grep -qF "cannot build a default VENDOR_ROUND_DIR" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "did not name the default it could not build"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif ! grep -qF "HOME is unset or empty" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "refused without naming HOME as the cause"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif grep -qF "is set but empty" <<<"$out"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "said it was set but empty; it is unset"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
 fi
 
 echo
