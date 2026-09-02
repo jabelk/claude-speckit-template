@@ -33,8 +33,16 @@ jobs:
           BODY="${BODY:0:3000}"
           EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
           # One redirect, not three (SC2129). Pre-existing since #1; fixed here only
-          # because the new guard-suites workflow made actionlint part of this branch's
-          # gate, and a chained gate blocks the vendor leg on any actionable finding.
+          # because the LOCAL pre-push gate lints this file — review-plan-v2
+          # --static-only runs actionlint and shellcheck — and that leg is chained, so
+          # an actionable finding there blocks the vendor leg behind it.
+          #
+          # This comment credited guard-suites.yml with making actionlint part of CI
+          # until 2026-09-02, when the PR-side review checked and it was false: that
+          # workflow runs the two guard suites and shellcheck, and NO workflow in this
+          # repo runs actionlint or markdownlint. Corrected rather than made true by
+          # adding the CI steps, deliberately — the local leg already gates every push,
+          # and new CI jobs are not what a guard-script promotion branch is for.
           {
             echo "body<<$EOF"
             echo "$BODY"

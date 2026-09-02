@@ -23,7 +23,7 @@
 # carried the retired form: case A's five assertions all failed and the run
 # printed `DONE: pushed upgrade/spec-kit-v9.9.9` directly under the assert
 # step's `No such file or directory`, at `summary: 1 ok, 0 failed`, exit 0.
-# 5 passed, 5 failed.
+# Every one of case A's assertions went red, and no other case did.
 #
 # Case D is the same shape one layer earlier — a `git status` that FAILS read as
 # a clean worktree — and it carries its own discrimination check rather than a

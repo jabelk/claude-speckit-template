@@ -281,15 +281,15 @@ Two things from that history generalise past this wrapper. **An exit 3 dated bef
 `CONNECT_CAP` — so read the reviewer output the refusal prints rather than trusting the
 verdict. And the vacuity was in the **fixtures**, twice, in opposite directions: one
 fake wrote a log line the real CLI never emits, manufacturing the very signal under
-test, while another omitted a progress line the real CLI always emits and so scored
-`27 passed, 2 failed` against a *correct* script. A double can make right code look
+test, while another omitted a progress line the real CLI always emits and so turned two
+cases red against a *correct* script. A double can make right code look
 wrong as readily as it makes wrong code look right, and reading the test will not
 reveal either. Defect 7 adds a third angle on the same warning, and it is the one to
 carry into any suite: the vacuity was in the **harness**, not in a fake or an assertion.
 `case_run` captures `2>&1`, so all thirteen fixtures were structurally blind to which
 stream anything went to — the merge that is right for every other case is exactly what
 removed the condition under test. One case now captures the two streams separately and
-is red on exactly one assertion (`29/1`) against the pre-fix script. When a harness
+is red on exactly one assertion against the pre-fix script. When a harness
 merges two things, ask whether the difference between them is what you are asserting on.
 Defect 8 is the fourth angle and the simplest to state: the orphan fixture's grandchild
 was `exec sleep 600`, which **dies on TERM**, so the KILL pass was never asked to find
@@ -297,7 +297,7 @@ anything and the one case whose whole job is catching orphans passed against the
 script. A double that *cooperates* with the mechanism under test removes the condition as
 surely as one that invents a signal. Write the fixture that refuses the first signal, or
 the escalation is untested by construction — the companion fixture that does `trap ''
-TERM` is red at `30 passed, 1 failed` against the re-enumerating version.
+TERM` is red against the re-enumerating version, on that case and no other.
 
 Defects 9 and 10 are the fifth and sixth angles, and 10 is the one worth wincing at.
 Defect 9's blindness is a **boundary no fixture landed on**: every case either hung well
@@ -314,7 +314,7 @@ are a second apart and indistinguishable — so the interval under test was coll
 suite's own settings, with nothing wrong in any assertion and nothing to notice in any
 fixture. Its case runs `POLL` longer than the whole test timeline and asserts on the
 **clock**, since buggy and fixed print the same message and the same exit 3 and differ
-only in when (`33 passed, 1 failed`, reporting `took 61s to act on TERM`). When every case
+only in when (red on that case alone, reporting `took 61s to act on TERM`). When every case
 in a suite shares a knob, ask what interval that setting makes invisible.
 Defect 12 is the eighth angle and plainer still: **an environment the harness inherited and
 therefore never chose.** `HOME` is set in every shell anyone runs a suite from, so the
@@ -337,7 +337,7 @@ of the *same* signal — the condition the ordering bug needs. Not an absent dou
 invented signal, a merged harness, a cooperating process, an unlanded boundary, a shared
 knob, an inherited environment, or a bad anchor: a *combination* of inputs no case had
 reason to build. Its fixture is `fake_healthy_but_slow` with one line moved to stderr, red
-at `37 passed, 1 failed` on that case and no other. When a fix reads two sources of one
+on that case and no other. When a fix reads two sources of one
 signal, write the case where both of them speak.
 TEN of the fourteen defects had a test that should have caught them and could not — defects
 3, 4, and 7 through 14 — and in every one of those ten the vacuity was in the fixture, the
@@ -382,7 +382,7 @@ every run of the very case written to catch exactly that. The fix flattens the c
 before matching, and it has a stated cost: a flattened header cannot tell a **quotation** of
 a retired count from a live claim, so a retired phrase has to be described rather than
 quoted. Measured both directions rather than argued — flattened, the wrapped stale phrase is
-red; line-wise, the same phrase sitting in the header scores `38 passed, 0 failed`.
+red; line-wise, the same phrase sitting in the header scores green.
 
 **Exit 3 is not a failure you retry until it passes, and it is not a clean gate.** The
 PR-side CodeRabbit review is a different path — GitHub to vendor, server-side, never

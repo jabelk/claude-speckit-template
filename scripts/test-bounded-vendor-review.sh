@@ -1360,6 +1360,40 @@ if [ -z "$hdr_fail" ]; then
   [ -n "$hdr_bad" ] && hdr_fail="stale count phrase:$hdr_bad — wanted \"of the $total_word\""
 fi
 
+# (E) no ABSOLUTE SUITE TOTAL in the header, or in this file's own comments
+#
+# A through D guard the DEFECT count. The header's OTHER kind of number went unguarded
+# until the PR-side review on 2026-09-02 found three of them stale in a single round —
+# three mutation results, each written as a true measurement of "N passed, one failed",
+# each falsified by the next case somebody added, none of them able to say so. That is
+# precisely the defect the four checks above exist for, sitting in the number nobody
+# thought to count. The suite's own case total is therefore written down nowhere: this
+# harness PRINTS it, which is the one form that cannot go stale.
+#
+# What survives the ban is the FAILURE count, because that is the information those
+# measurements actually carried — "one case and no other" is the discrimination being
+# claimed, and "both non-review cases, neither findings case" is a mutation matrix. The
+# passed count was only ever the arithmetic complement of the suite size at one instant.
+#
+# Both shapes are refused, and the compact one is the load-bearing half: the same claim
+# written in four characters is the form the sibling documents used, so banning only the
+# spelled-out form would be a half-enumerated ban — defect 8's shape.
+#
+# IT SCANS THIS FILE'S COMMENTS TOO, which is the one place the other four checks
+# deliberately do not look: a mutation result belongs beside the case it was measured
+# on, so this file is where the next stale total will be written, and three of the four
+# found this round were in a comment rather than in the header. The stated cost is the
+# flattened-header cost one file over — a comment cannot QUOTE a retired total to
+# describe it, only describe it, which is why the paragraph above says "N passed, one
+# failed" in words. A false red costs one reword; a stale total costs a reader
+# believing a number.
+if [ -z "$hdr_fail" ]; then
+  hdr_tot=$(grep -h '^#' "$UNDER_TEST" "$0" |
+            grep -oE '[0-9]{1,2} passed, [0-9]{1,2} failed|[0-9]{1,2}/[0-9]{1,2}' | head -1)
+  [ -n "$hdr_tot" ] &&
+    hdr_fail="an absolute suite total (\"$hdr_tot\") is stated in a comment — it goes stale on the next added case; state the failure count instead"
+fi
+
 if [ -n "$hdr_fail" ]; then
   failed=$((failed + 1)); printf 'FAIL %-56s %s\n' "$label" "$hdr_fail"
 else

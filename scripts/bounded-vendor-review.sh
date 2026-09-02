@@ -322,8 +322,8 @@
 #      specifically to catch orphans passes against the buggy script. Not an invented
 #      signal (4), not an absent double (3), not a merged stream (7): a double that
 #      COOPERATES with the thing under test. A companion fixture whose grandchild
-#      does `trap '' TERM` and loops is red at `30 passed, 1 failed` against the
-#      re-enumerating version, on that one case and no other. Raised by the PR-side
+#      does `trap '' TERM` and loops is red against the re-enumerating
+#      version, on that one case and no other. Raised by the PR-side
 #      review on 2026-09-01, which named the fixture as the reason the suite was
 #      blind to it and was right.
 #
@@ -342,7 +342,7 @@
 #      `fake_finishes_during_the_final_nap` under `TOTAL_CAP=3 POLL=5` is that in the
 #      smallest form there is. Fix is one `kill -0` — a builtin, and the same test the
 #      loop already runs as its `while` condition, so it adds no trust assumption.
-#      Red at `31 passed, 1 failed` without it, on that case and no other.
+#      Red without it, on that case and no other.
 #
 #  10. IT REPLAYED THE REVIEWER'S STDERR ON STDOUT. The CLI was launched with
 #      `>"$out" 2>&1` and `$out` was then `cat` to this script's stdout, so any
@@ -359,8 +359,8 @@
 #      precisely what removed this condition — and defect 7's own write-up says so, in
 #      this file, about this harness. The case added for defect 7 pins where THIS
 #      SCRIPT's prose goes and says nothing about the reviewer's two streams, which is
-#      the near-miss that reads as coverage. Red at `32 passed, 1 failed` with the
-#      streams re-merged, on the new case and no other.
+#      the near-miss that reads as coverage. Red with the streams re-merged, on
+#      the new case and no other.
 #
 #  11. IT SLEPT THROUGH THE SIGNAL THAT WAS SUPPOSED TO KILL THE REVIEWER. The wait
 #      loop's nap was a FOREGROUND `sleep "$nap"`, and bash does not run a trap while a
@@ -449,7 +449,7 @@
 #      CR_LOG_DIR and the generic loop cannot tell them apart. Red one mutation per
 #      assertion: `if false` gives "refused without naming HOME"; keeping the false
 #      sentence while adding HOME gives "it is unset"; routing set-but-empty into the HOME
-#      branch reds both cases at 35/2 while the generic loop's own `CR_LOG_DIR=` case
+#      branch reds both of those cases while the generic loop's own `CR_LOG_DIR=` case
 #      stays GREEN, which is what makes the new one load-bearing rather than duplicate.
 #
 #  14. A STALE LINE ON STDERR OUTRANKED A LIVE ONE ON STDOUT, AND REFUSED A REVIEW THAT
