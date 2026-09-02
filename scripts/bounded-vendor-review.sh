@@ -14,6 +14,10 @@
 #           was killed by a signal from outside this script (status 128+); or it
 #           returned non-zero without ever reaching a review phase, i.e. it failed
 #           before reviewing rather than reviewing and finding something
+#         4 REFUSED BEFORE REVIEWING, because this branch has already had
+#           ROUND_CAP reviews. Also no review, and deliberately not 3: 3 is a
+#           vendor or session problem you can retry, 4 is a decision that another
+#           round is the wrong move and a human should look
 #
 # There is no exit 1, deliberately. `coderabbit` uses 1 for every outcome it has
 # — unknown flag, not-a-repository, and "found actionable issues" all exit 1
@@ -85,493 +89,85 @@
 #   nothing". If everything else in this file breaks, this still fires.
 #
 #   CONNECT_CAP (default 120s) is an EARLY kill, and it reads THE REVIEWER'S OWN
-#   OUTPUT to decide — BOTH captured streams, for the reason in 10 below — see
-#   `connect_verdict`. It asks whether the last progress
-#   line still names the connect phase or a later one. That read can fail in every
-#   way a parse can — no progress line yet, an unreadable capture, a renamed
-#   phase — and every one of those failures makes it decline to kill early, which
-#   defers to TOTAL_CAP. So the worst a broken CONNECT_CAP can do is make the
-#   refusal arrive 900s late instead of 120s. It cannot manufacture a pass. That
-#   asymmetry is the only reason a parse is allowed in this file at all.
+#   OUTPUT to decide — see `connect_verdict`. It asks whether the last progress
+#   line still names the connect phase or a later one, in either of the two shapes
+#   the CLI emits (prose `elapsed` lines, or `"phase":"..."` NDJSON under
+#   `--agent`). That read can fail in every way a parse can — no progress line
+#   yet, an unreadable capture, a renamed phase — and every one of those failures
+#   makes it decline to kill early, which defers to TOTAL_CAP. So the worst a
+#   broken CONNECT_CAP can do is make the refusal arrive 900s late instead of
+#   120s. It cannot manufacture a pass. That asymmetry is the only reason a parse
+#   is allowed in this file at all.
 #
-#   THIS PARAGRAPH SAID "reads the CLI's log" until 2026-09-01 and was describing
-#   the defect rather than the design — see 4 below. It then said "stdout" for one
-#   round after defect 10 split the streams, which was the same class of stale claim
-#   one revision smaller: `connect_verdict` reads both captures deliberately, because
-#   WHICH stream carries the progress lines has only ever been measured merged, and
-#   picking one on an assumption is how defect 4 happened. Kept as a correction rather
-#   than silently reworded, because a design comment that outlives the design it
-#   describes is how the next reader reproduces the bug.
+#   It reads `$out` first and falls back to `$err` only when `$out` carries no
+#   progress line at all, because `cat` of both orders by FILE rather than by
+#   time, and one stale connect-phase line in stderr then outranks every later
+#   line in stdout. Which stream carries the progress lines is now measured
+#   rather than assumed — stdout, with stderr empty in agent mode — but the
+#   ordered read is correct either way, which is the point: it needed no
+#   measurement to be right. THIS PARAGRAPH SAID "reads the CLI's log" until
+#   2026-09-01, and then "stdout", and then that the streams had only been
+#   measured merged. All three were stale claims about the design left sitting in
+#   the design comment; see defects 4, 10, 14 and 15 of the log for what each one
+#   cost. A design comment that outlives the design it describes is how the next
+#   reader reproduces the bug.
 #
-# THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because
-# each is a way this file's own claims were false. Sixteen of them. Eleven are the same
-# defect — AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE
-# ADVERTISED — and the other five are their own classes, listed anyway because
-# dropping them would make the pattern look tidier than it is. Not one of the sixteen
-# was found by the author reasoning about the code. TWELVE of the sixteen had a test that
-# should have caught them and could not — defects 3, 4, and 7 through 16 — and in every
-# one of those twelve the vacuity was in the FIXTURE, THE HARNESS, THE INHERITED
-# ENVIRONMENT, THE UNRUN MODE, THE UNMODELLED READER, or THE ASSERTION'S ANCHOR rather
-# than in the assertion's logic.
+# A THIRD BOUND, AND IT BOUNDS THE LOOP RATHER THAN THE RUN. The two caps above
+# bound one review. Nothing bounded how many reviews a branch gets, and on
+# 2026-09-01 this file had taken TWENTY-PLUS rounds on one 229-line script, with a
+# defect found in most of them and each found in the round that fixed its predecessor,
+# a third of them changing no guard behaviour at all and several purely about
+# prose. A floor rather than a figure, for the reason the next paragraph gives. The rule
+# meant to stop that existed the whole time, as a sentence in CLAUDE.md saying
+# that round 3+ means something is off and should be surfaced to the operator. It
+# is a paragraph asking the agent to notice, and the agent did not notice, twenty-two
+# times. A bound that depends on the bounded party spotting it is not a bound —
+# which is this file's own oldest lesson pointed at the review process instead of
+# at the script.
 #
-# The count is anchored to those defect IDs rather than asserted on its own, because it
-# has now been wrong in three different places at once: this line said SIX, all five
-# docs said SEVEN, and the entries below already numbered EIGHT distinct shapes (11 is
-# labelled "a seventh shape", so 12 is the eighth). A summary number with nothing
-# anchoring it drifts one round after it is written, which is the same reason the
-# suite's launch count now states how to derive itself instead of naming a figure.
+# So: ROUND_CAP (default 3) gives each repository directory and branch that many
+# rounds and refuses the next with exit 4. Two properties make it safe to state in
+# thirty lines rather than defending over sixteen rounds. It can only REFUSE — no
+# failure of the round state can manufacture a pass, because the pass is decided
+# 500 lines below by the reviewer's own verdict and the round state is never consulted
+# there. And it spends a round only on a review that HAPPENED: exit 2, 3 and 4 keep
+# nothing, so a vendor outage cannot exhaust the budget for a branch that has had no
+# review. Raise it explicitly (`ROUND_CAP=6`) or reset the branch (`ROUND_RESET=1`);
+# both are a deliberate number rather than an off switch, and `ROUND_CAP=0` is refused
+# by the numeric validator like any other useless bound.
 #
-# THAT ANCHORING IS NOW A TEST, AND ITS FIRST REAL USE WAS CATCHING THIS PARAGRAPH.
-# `header's own counts match its enumeration` parses the ordinals below and checks the
-# totals above against them. Adding entry 13 turned it red — 13 entries against a total
-# still written as the previous number — before any human read the diff. That is the
-# whole argument for a mechanical check over a rule in a comment: the rule was already
-# in the comment, two lines up, and it did not stop the number going stale a fourth time.
+# THE FIRST VERSION OF IT WAS THIS FILE'S OWN SIGNATURE DEFECT, and the PR-side review
+# caught it in the round that added it: it read a count, compared it, and wrote count+1
+# when the review returned — three steps with a vendor review in the middle, so two
+# wrappers on one branch both read 2, both passed, and both sent a diff. A cap of three
+# admitted six. Admission is now an O_EXCL claim of a slot named 1..ROUND_CAP, which is
+# why there is no count anywhere below. See defect 17 of the log for the alternative
+# (a lock across the review) and why it was declined.
 #
-# AND THEN THE CHECK ITSELF WAS THE NEXT THING FOUND WRONG, one round later, which is
-# the ugliest and most useful thing in this header. It greped LINE BY LINE for a claim
-# that is a sentence, so a count phrase wrapped across two comment lines was invisible
-# to it — and one was: entry 6 named a total of six, stale since the seventh defect
-# landed, sitting green through every run of the case written to catch exactly that. The
-# fix reads the comment block as one flattened string. A check whose failure is
-# indistinguishable from its success is not a check, and writing a check FOR that
-# failure mode is not the same as being immune to it. One cost of the fix, stated
-# because it shapes this header: the check cannot tell a QUOTATION of a retired count
-# from a live claim, so a stale phrase being retired is described here rather than
-# quoted. Verbatim would be better history and would also be a permanent red.
+# THE DEFECTS FOUND BY USING IT are in `scripts/vendor-gate-defect-log.md`, which is
+# the only copy — and the only place their COUNT is written, because every figure ever
+# mirrored out of that list has gone stale, the last one on the day the mirrors were
+# collapsed to one. All fixed here; every one found by using this script or by a reviewer
+# reading it, and none by the author reasoning about it. Read that log before changing
+# anything below: most of the list is one defect — an advertised bound, or an advertised
+# verdict, that was not the one advertised — and nearly all of them had a test that should
+# have caught them and could not, in every case because the vacuity was in the fixture,
+# the harness, the inherited environment, the unrun mode, the unmodelled reader, or the
+# assertion's anchor rather than in the assertion's logic.
 #
-# Eight of the sixteen (9 through 16) were found only AFTER the other eight were fixed
-# and written up, by reviewers reading the fixed file — 11 was found in the round that
-# fixed 9 and 10, 12 in the round that fixed 11, 13 in the round that fixed 12, 14 in
-# the round that fixed 13, 15 in the round that fixed 14, and 16 in the round that
-# fixed 15, in a display the round that fixed 14 had rewritten. The list is not
-# converging on zero, and pretending
-# otherwise in this header would be the same category of false claim as the defects
-# themselves.
-#
-#   1. THE EARLY KILL WAS DEAD WHENEVER A SECOND CLI SESSION WAS RUNNING. The
-#      original `this_log()` demanded EXACTLY one log file new since launch and
-#      returned empty otherwise, so that a concurrent session's log could not time
-#      our run against someone else's progress. That is what it did, and the cost
-#      is the defect: running two gates at once on this machine is the ORDINARY
-#      case, and whenever the second one's log appeared the count went to 2, the
-#      early kill switched off, and the advertised 120s bound silently became the
-#      900s TOTAL_CAP. Measured 2026-08-31 on a real branch: our log at 04:41:02Z,
-#      a second at 04:42:21Z belonging to a `bounded-vendor-review` running in
-#      another repo (its wrapper pid was alive and watching its own child, checked
-#      with `ps -eo pid,ppid,pgid,lstart`). Fail-closed, and the 120s promise in
-#      this header was still not what happened. A bound that switches off when a
-#      second copy of the gate runs is not a bound you have.
-#
-#      THE ATTRIBUTION WAS WRONG FIRST TIME, and the wrong version is worth
-#      recording because it is the more alarming one and it was not true: this
-#      header said the CLI writes a second log from a child process within one
-#      invocation. It does not. Two logs 79s apart is two chains offset by the
-#      runtime of leg 1, and the same 79s appearing twice is what that offset
-#      looks like, not a CLI behaviour. The fix below is unchanged by the
-#      correction — the condition is "more than one new log", whatever wrote them.
-#
-#      So the connect test is now over ALL logs new since launch: any one of them
-#      showing progress past the marker counts as connected. That keeps the
-#      fail-closed direction (a healthy concurrent session makes us DECLINE to
-#      kill and defer to TOTAL_CAP) while still bounding the case where every new
-#      log is stuck, which is what a vendor outage looks like from here.
-#
-#   2. IT ORPHANED THE REVIEWER WHEN THE WRAPPER ITSELF WAS KILLED. The only trap
-#      was `trap 'rm -f "$out"' EXIT`, so an outer timeout or a Ctrl-C killed the
-#      wrapper and left the CLI running: an unsupervised vendor process is an
-#      egress nothing is bounding, and it contradicts this file's own stated goal
-#      that nothing survives. INT/TERM/HUP are now trapped and kill the reviewer's
-#      whole tree before exiting 3.
-#
-#      PROVEN BY FIXTURE, NOT BY FIELD MEASUREMENT, and the difference matters
-#      because the field observation that prompted it was misread. A live
-#      `coderabbit review` was seen at 5m51s elapsed after a wrapper was killed,
-#      and its parent pid was recorded without checking whether that parent was
-#      still alive — on the same machine, at the same time, a concurrent gate's
-#      wrapper was alive and watching exactly such a child. So treat that sighting
-#      as NOT VERIFIED. What is verified is the fixture: with no signal trap, a
-#      wrapper killed by SIGTERM leaves the reviewer and its grandchild running,
-#      reproduced on demand in `test-bounded-vendor-review.sh` and failing red two
-#      independent ways. The defect is real; the anecdote was not evidence of it.
-#
-#      Killing the TREE, not the pid, is the point. Without `setsid` (macOS has
-#      none) the CLI shares this shell's process group, so `kill -- -$pid` fails
-#      and a bare `kill $pid` leaves the grandchildren holding the socket — which
-#      is precisely the orphan measured above. `pgrep -P` walks the descendants.
-#      It is an external command, but it is in the KILL path, never the decision,
-#      so its failure can delay a refusal and cannot manufacture a pass.
-#
-#   3. AN EXPLICITLY EMPTY OVERRIDE SILENTLY BECAME THE DEFAULT, so a bound the
-#      operator tried to set was not set and read exactly like one that was.
-#      `${VAR:-default}` substitutes for an empty value as well as an unset one, so
-#      `POLL=` became 5 and `TOTAL_CAP=` became 900, and the validator's own `''`
-#      branch below was unreachable dead code. Five variables had the hole and the
-#      suite probed one. Found by CI rather than here, and this machine
-#      structurally could not have found it: the cases asserted the exit STATUS and
-#      never the message, so any exit 2 scored green, and their `CR_BIN=/bin/true`
-#      does not exist on macOS (it is `/usr/bin/true`) — the harmless-real-binary
-#      trick whose whole job is to leave the bad value as the only remaining reason
-#      to exit 2 instead handed the script a missing binary, and every case exited 2
-#      down the PATH check. On Linux the same line worked as designed and failed on
-#      the real bug within a day. Fix is `${VAR-default}` throughout, one case per
-#      variable, each asserting the refusal NAMES what it rejected. Two things worth
-#      keeping: `CR_BIN=` fell back to the real `coderabbit` and launched an actual
-#      vendor review from inside the test suite, so a vacuous default is not only a
-#      wrong answer but an egress; and a double does not have to be elaborate to be
-#      vacuous — this one only had to be ABSENT, which is the cheapest way there is
-#      to remove the condition under test.
-#
-#   4. THE CONNECT DETECTOR READ THE WRONG STREAM, AND SO COULD NOT TELL A WORKING
-#      REVIEW FROM A HUNG ONE. It looked in the CLI's LOG FILE for any line after
-#      the WebSocket marker. The CLI writes nothing to its log after that marker
-#      during a healthy review — every progress line goes to stdout. Measured
-#      2026-09-01: a review whose stdout had reached `Writing review comments...
-#      1m 01s elapsed` had a log whose last line before our SIGTERM was the marker,
-#      written 118s earlier. Identical evidence to an outage. So the detector was
-#      killing healthy reviews at CONNECT_CAP while reporting the vendor as
-#      unreachable, and it had been doing so on every run since it was written.
-#
-#      This is the file's own rule applied to the one check invented here rather
-#      than inherited from the sibling guard: A CHECK WHOSE FAILURE IS
-#      INDISTINGUISHABLE FROM ITS SUCCESS IS NOT A CHECK. Worth sitting with, given
-#      the header above it had already said that four times about someone else's
-#      code. The fixtures could not catch it because the "connected then slow" fake
-#      wrote a log line after the marker, manufacturing the signal the real CLI
-#      never emits — a double that invents its own evidence proves only itself.
-#
-#      `connect_verdict` now reads "$out", the reviewer's own stdout, which was
-#      captured and sitting unread the entire time. Consequence for defect 1 above:
-#      logs are no longer part of the decision at all, so the multi-log fix is
-#      correct but no longer load-bearing. `new_logs` survives only to name files
-#      in the failure message, where listing all of them is still right.
-#
-#   5. THE POLL SLEPT PAST THE DEADLINE, so once again the advertised bound was not
-#      the bound. `sleep "$POLL"` ran unconditionally at the top of the wait loop,
-#      before either cap was consulted, and `POLL` is validated as a positive
-#      integer and never against the caps. `TOTAL_CAP=900 POLL=3600` therefore left
-#      a hung reviewer alive for about an hour, and even the defaults overshot
-#      TOTAL_CAP by up to one poll interval. Raised by the PR-side review rather
-#      than found here, which is worth recording: it is the FIFTH instance in this
-#      one file of a bound that reads as enforced and is not, and the previous four
-#      did not make the fifth visible. The nap is now the shortest of POLL and
-#      whichever deadline is nearer — see the wait loop, including why the connect
-#      deadline stops constraining it once passed.
-#
-#   6. A REVIEWER THAT NEVER REVIEWED READ AS A VERDICT. This is the first entry in
-#      this list that was a genuine SILENT PASS rather than a late refusal, and it
-#      took two of them composed to get there. (Until 2026-09-01 this entry named a
-#      total instead — six, which went stale five defects later and was invisible to
-#      the case that checks these numbers, because the phrase wrapped across two
-#      comment lines and that check read the file line by line. A count with no reason
-#      to be a count is a claim that will rot; this is now a claim about the list.) The reviewer-returned path exited 0
-#      unconditionally, on the stated contract that this script's job is only that
-#      a verdict EXISTS and the CLI's status is the caller's to read. But a CLI that
-#      died on a signal, or errored before reviewing anything, also "returns" — and
-#      it produced no verdict at all. Meanwhile the git-location refusal above
-#      tested `[ -n "${!v:-}" ]`, which is blind to an explicitly EMPTY value, the
-#      same hole as 3 one file over. Compose them: `GIT_DIR='' <gate>` passes the
-#      refusal (empty is not "set" to that test), and empty `GIT_DIR` does not
-#      redirect git to another repository, it BREAKS git outright — measured
-#      2026-09-01, `fatal: not a git repository: ''`, exit 128. The reviewer then
-#      errors instead of reviewing, and the unconditional exit 0 reported a clean
-#      vendor review that never happened.
-#
-#      Both halves fixed. The refusal is `[ -n "${!v+x}" ]`, which asks whether the
-#      variable is SET rather than whether it has content. And the reviewer-returned
-#      path now has a verdict gate with two fail-safe branches, both of which
-#      refuse: a status of 128 or above is a signal death, unambiguous because the
-#      CLI never spends 128+ on findings; and any non-zero status with no
-#      post-connect phase line on stdout means it errored before reviewing. Note
-#      what is NOT done — the CLI's status is still not adopted, because findings
-#      exit 1 and adopting it would turn every flagged review into a refusal. Read
-#      the output; the status is reported beside it, not laundered through ours.
-#
-#      `GIT_INDEX_FILE=''` behaves differently from the other three and from what
-#      the sibling guard's docs record: it does not error, and git reports every
-#      tracked file as `D` deleted. Those docs measure `GIT_INDEX_FILE=/tmp/empty`
-#      as exit 128 `index file smaller than expected`; the empty STRING is the
-#      quieter case, and both suites now cover the empty-value form of all four.
-#
-#   7. THE WRAPPER'S OWN PROSE WENT OUT ON THE REVIEWER'S STDOUT. Not a bound this
-#      time, and listed anyway rather than dropped for spoiling the pattern — the
-#      convention above is that every defect found in this file stays in the header,
-#      and quietly omitting the one that does not fit the tidy sentence is its own
-#      version of the problem. One documented chain invokes this script with
-#      `--agent` — see defect 15 for the measured scope, which this entry
-#      overstated as "the skills" until 2026-09-01 — and in that mode the CLI's
-#      stdout is a machine-readable stream; the summary line and its four
-#      continuation lines went to that same stream, so a consumer parsing the vendor
-#      leg read records the vendor never emitted. Every other message here was
-#      already on stderr, so this was inconsistency rather than design. Caught by the
-#      PR-side review on the promotion branch, before any consumer parsed it.
-#
-#      Its own test hole is the more interesting half: `case_run` captures `2>&1`, so
-#      all thirteen fixtures were structurally blind to which stream anything went
-#      to. Same lesson as 3 and 4 from a third angle — the HARNESS removed the
-#      condition under test, and no amount of reading the assertions would show it.
-#      The suite now has one case that captures the two streams separately, and it is
-#      red on exactly one assertion against the pre-fix script.
-#
-#   8. THE KILL PASS RE-ENUMERATED A TREE THE TERM HAD ALREADY DISMANTLED, so a
-#      grandchild that ignored SIGTERM was never killed — defect 2's orphan holding
-#      the socket, arriving one signal later. `kill_tree` walked `pgrep -P` on every
-#      call, and both escalation sites called it twice. After the TERM the direct
-#      child is gone and its children belong to init, so the second walk returns
-#      nothing and the KILL reaches only the corpse. The tree is now enumerated once,
-#      before the first signal, and both passes escalate over that same list.
-#
-#      The fixture is again where the vacuity lived, and this is its fourth distinct
-#      shape. `fake_hang_with_grandchild` runs `exec sleep 600`, which DIES ON TERM —
-#      so the KILL pass was never asked to find anything, and the case that exists
-#      specifically to catch orphans passes against the buggy script. Not an invented
-#      signal (4), not an absent double (3), not a merged stream (7): a double that
-#      COOPERATES with the thing under test. A companion fixture whose grandchild
-#      does `trap '' TERM` and loops is red against the re-enumerating
-#      version, on that one case and no other. Raised by the PR-side
-#      review on 2026-09-01, which named the fixture as the reason the suite was
-#      blind to it and was right.
-#
-#   9. IT CALLED A COMPLETED REVIEW A CAP KILL — the first FALSE REFUSAL in the list
-#      rather than a false pass. Liveness was tested only at the top of the wait
-#      loop, and the nap inside it is clamped (defect 5's fix) to end exactly ON a
-#      deadline. So a reviewer that RETURNED during that final nap met
-#      `SECONDS >= TOTAL_CAP` on wake, and the loop set `killed_reason="total"`,
-#      threw the reviewer's own exit status away, and printed NO VENDOR REVIEW
-#      HAPPENED over a review that happened. Seventh instance of an advertised
-#      verdict that was not the one advertised, running in the other direction.
-#
-#      The window is one nap wide, which is exactly why no case touched it: every
-#      other fixture either hangs well past the cap or returns well inside a nap. A
-#      boundary needs a fixture that lands ON it, and
-#      `fake_finishes_during_the_final_nap` under `TOTAL_CAP=3 POLL=5` is that in the
-#      smallest form there is. Fix is one `kill -0` — a builtin, and the same test the
-#      loop already runs as its `while` condition, so it adds no trust assumption.
-#      Red without it, on that case and no other.
-#
-#  10. IT REPLAYED THE REVIEWER'S STDERR ON STDOUT. The CLI was launched with
-#      `>"$out" 2>&1` and `$out` was then `cat` to this script's stdout, so any
-#      diagnostic the vendor wrote to stderr came back as a line on the stream a
-#      `--agent` consumer parses as NDJSON. Its own class, and a galling one: defect 7
-#      is "stdout belongs to the reviewer, not to this script", fixed by moving this
-#      wrapper's prose to stderr — and the merge one layer in, in the production
-#      launch line, survived that whole round. Now two temp files, reviewer stdout to
-#      stdout and reviewer stderr to stderr, and `connect_verdict` reads BOTH because
-#      which stream carries the progress lines has only ever been measured merged.
-#
-#      THE HARNESS, for the second time and the sixth blind test overall.
-#      `case_run` captures `2>&1`, which is right for what those cases assert and is
-#      precisely what removed this condition — and defect 7's own write-up says so, in
-#      this file, about this harness. The case added for defect 7 pins where THIS
-#      SCRIPT's prose goes and says nothing about the reviewer's two streams, which is
-#      the near-miss that reads as coverage. Red with the streams re-merged, on
-#      the new case and no other.
-#
-#  11. IT SLEPT THROUGH THE SIGNAL THAT WAS SUPPOSED TO KILL THE REVIEWER. The wait
-#      loop's nap was a FOREGROUND `sleep "$nap"`, and bash does not run a trap while a
-#      foreground command is executing — it waits for that command to finish. So
-#      `on_signal` was deferred by up to a whole nap, and the clamp above it bounds the
-#      nap by TOTAL_CAP and never by POLL: `POLL=900` left a killed wrapper's reviewer
-#      alive for about fifteen minutes, holding the vendor socket over an unsupervised
-#      worktree. Defects 2 and 8 from a third direction — a signal that does not reach
-#      the reviewer — and the eighth instance of an advertised bound that was not the
-#      bound, since the traps advertise "killed the reviewer with it" and that sentence
-#      was true up to POLL seconds later than it read.
-#
-#      MEASURED, not read out of the manual, 2026-09-01: a probe trapping TERM around a
-#      foreground `sleep 10`, sent TERM at t=1s, printed `TRAP at 10s`; backgrounded and
-#      `wait`ed, the same probe printed `TRAP at 1s`. `wait` is the interruptible one.
-#      The nap is now backgrounded, `wait`ed with `|| true` (an interrupted `wait`
-#      returns 128+signal; this file runs `set -uo pipefail` and deliberately NOT `-e`,
-#      so that `|| true` is defensive and declarative rather than load-bearing — the
-#      first version of this entry said `-e` would abort the loop, which is not true of
-#      this script and is corrected here rather than reworded away), and its pid is
-#      reaped by `on_signal` — a trap that killed the reviewer and left a stray `sleep`
-#      would be defect 8's orphan in miniature.
-#
-#      NO FIXTURE COULD HAVE CAUGHT IT AS THE SUITE WAS BUILT, which is a seventh shape
-#      of blindness rather than a seventh excuse: every signal case ran at the short
-#      test POLL, where a deferred trap is indistinguishable from a prompt one. The new
-#      case runs `POLL` LONGER THAN THE WHOLE TEST TIMELINE, which is the only
-#      arrangement in which the deferral is visible at all.
-#
-#  12. THE DEFAULT LOG PATH COULD MAKE THIS SCRIPT EXIT 1 — the one status it promises
-#      never to use, produced by the line that builds a default. `LOG_DIR` was
-#      `"${CR_LOG_DIR-$HOME/.coderabbit/logs}"`, and under `set -u` an UNSET HOME aborts
-#      right there with `HOME: unbound variable`. Measured 2026-09-01: `env -u HOME`
-#      against that form gives exactly that, at exit 1. The whole reason exit 3 exists is
-#      that the CLI spends 1 on FINDINGS, on an unknown flag, and on "not a git
-#      repository" alike; a caller reading 1 as "reviewed and flagged something" would be
-#      reading a script that never reached the reviewer. Ninth instance of the advertised
-#      verdict that was not the one advertised, and the second (after 6) to manufacture
-#      the appearance of a review rather than merely delay a refusal.
-#
-#      NOT EXOTIC, which is the part worth arguing rather than asserting: HOME is absent
-#      from cron, from systemd units, and from git hooks run by some daemons, and the gate
-#      documentation this script belongs to suggests wiring it into a pre-push hook — the
-#      same environment that armed defect 9 of the SIBLING guard, since git exports its
-#      location variables to every hook it runs. Fix is `${HOME:+$HOME/...}`, which
-#      yields empty for unset AND for empty, so both reach the validator below and are
-#      refused with exit 2. Empty is the correct answer for both: a log root of `/`
-#      matches nothing, connect_verdict() degrades to `unknown` forever, and the early
-#      kill is switched off again, which is defect 3's shape one layer out.
-#
-#      A test could have caught this one, and the reason none did is the plainest in the
-#      list: HOME is set in every shell anybody runs a test from, so absence of the
-#      variable was never a state any fixture constructed. `env -u HOME` is the whole
-#      case, and it is red at exit 1 against the old form.
-#
-#  13. THE REFUSAL THAT FIXED 12 NAMED THE WRONG VARIABLE AND GAVE ADVICE THAT COULD NOT
-#      WORK. Defect 12's fix made an absent HOME yield an empty LOG_DIR, which reaches
-#      the generic empty-value validator below — correct in status, and the message it
-#      prints is `CR_LOG_DIR is set but empty. Unset it to take the default`. With HOME
-#      absent and CR_LOG_DIR never set, EVERY CLAUSE OF THAT IS FALSE: CR_LOG_DIR is not
-#      set, unsetting it changes nothing, and there is no default to take, because the
-#      thing that would have built one is the variable the message does not mention. The
-#      operator who lands here is in cron, a systemd unit, or a git hook — precisely
-#      where HOME goes missing and precisely where there is nobody to guess.
-#
-#      ITS OWN CLASS, and the reason it is not filed under the nine is that the exit
-#      status was right: 2, refused, no review claimed. What was false was the DIAGNOSIS.
-#      That makes it the sibling guard's eleventh round arriving here — that one told the
-#      caller to use `env -u`, which covers a single leg of an `&&` chain, so following
-#      the guard's advice defeated the guard. Advice that cannot resolve its own refusal
-#      is part of the defect and not cosmetics on top of one. Fixed with an explicit
-#      branch above the generic loop, on `[ -z "${CR_LOG_DIR+x}" ] && [ -z "${HOME:-}" ]`
-#      — `+x` asks SET, not non-empty, which is what leaves a genuinely set-but-empty
-#      CR_LOG_DIR in the generic branch where that message is true.
-#
-#      THERE WAS A CASE, IT WAS MINE, AND IT PINNED THE WRONG MESSAGE — a ninth shape of
-#      blindness, and the only one so far where the vacuity is in the ANCHOR rather than
-#      in a fixture, a harness, or the environment. Defect 12's case asserted exit 2 and
-#      the substring `CR_LOG_DIR`, and the WRONG message contains that substring as
-#      readily as the right one, so it scored green on advice that could not work. Written
-#      one day after the sibling guard's twelfth round said, about nine of its own
-#      assertions: grep for the SENTENCE the check produces, not for a token that appears
-#      in the wrong one too. Knowing the rule was not what caught it; a reviewer was.
-#      The case now also requires the refusal to name HOME and to NOT carry `is set but
-#      empty`, and a companion case pins the mirror image, since both refusals name
-#      CR_LOG_DIR and the generic loop cannot tell them apart. Red one mutation per
-#      assertion: `if false` gives "refused without naming HOME"; keeping the false
-#      sentence while adding HOME gives "it is unset"; routing set-but-empty into the HOME
-#      branch reds both of those cases while the generic loop's own `CR_LOG_DIR=` case
-#      stays GREEN, which is what makes the new one load-bearing rather than duplicate.
-#
-#  14. A STALE LINE ON STDERR OUTRANKED A LIVE ONE ON STDOUT, AND REFUSED A REVIEW THAT
-#      HAD CONNECTED. `connect_verdict` read `cat "$out" "$err" | tail -n 1`, and `cat`
-#      orders BY FILE rather than by time: a connect-phase `elapsed` line anywhere in
-#      $err beat every later phase line in $out, the verdict was `stuck`, and the early
-#      kill reported the vendor unreachable at CONNECT_CAP. Defect 4's outcome exactly —
-#      healthy reviews killed — reached by a different route, and the FALSE-REFUSAL
-#      direction, which is defect 9's shape.
-#
-#      WHAT MAKES IT WORTH ITS OWN ENTRY IS THAT THE PREVIOUS ROUND KNEW AND FILED IT AS
-#      A LIMIT. The comment above `connect_verdict` named this exact ordering, named the
-#      unsafe direction, and said the only thing that resolves it is measuring which
-#      stream carries the progress lines. That was wrong, and it is a tidier kind of wrong
-#      than a missed bug: reading $out first and falling back to $err is correct whichever
-#      stream carries them, keeps `unknown` when neither does, and needs no measurement at
-#      all. A limit that can be closed with no new evidence was never a limit; it was a
-#      defect with a note on it, and the note made it read as considered.
-#
-#      TENTH TEST HOLE, and it is defect 9's blindness at one remove: a STATE NO FIXTURE
-#      CONSTRUCTED. Every fixture that wrote to stderr wrote one non-progress diagnostic
-#      (defect 10's), and every fixture with progress lines put them all on stdout, so no
-#      case ever made the two streams competing sources of the same signal.
-#      `fake_slow_with_connect_line_on_stderr` is `fake_healthy_but_slow` with one line
-#      moved, and it is red against the merged read with `never got past its connect
-#      phase` — the outage sentence printed over a working review.
-#
-#  15. THE DETECTOR READ THE PROSE STREAM ONLY, SO IT REFUSED EVERY FINDINGS RUN IN
-#      THE `--agent` MODE THE SKILLS DOCUMENT. `_last_progress_line` greped for the
-#      literal `elapsed`, which the CLI emits in its human progress redraws. Under
-#      `--agent` there is no prose stream at all: stdout is NDJSON and carries no
-#      `elapsed` anywhere. So `connect_verdict` was permanently `unknown`, CONNECT_CAP
-#      was switched off, and — the part that matters — a findings run exits 1, met
-#      branch 2's `!= connected`, and printed NO VENDOR REVIEW HAPPENED over a review
-#      that had completed and flagged something. Defect 4's outcome by a third route,
-#      in the false-refusal direction.
-#
-#      HOW OFTEN THAT MODE IS ACTUALLY USED, because the first write-up of this
-#      defect got it wrong and propagated the wrong version into five documents.
-#      It said "both skills call the wrapper with `--agent`, so on an old copy that
-#      is the ordinary path, not an edge case." Counted 2026-09-01 across the two
-#      repos: five documented invocations of this script exist and exactly ONE
-#      passes `--agent` — the agent-mode chain in `review-plan-v2/SKILL.md`. (That
-#      sentence is deliberately phrased around the count rather than with an
-#      `of the <number>` construction, because the header-arithmetic check reads any
-#      such phrase above three as a claim about the defect total and cannot parse
-#      English well enough to know better. Its own comment predicted that cost and
-#      chose it; today is the first time it was actually paid, and one reword is
-#      what it came to. Describing the retired phrasing rather than quoting it is
-#      the same constraint one layer on — a quotation is a red too.) The primary
-#      gate command in every skill omits it, because the operator reads that leg's
-#      output as prose. So the defect is real and its blast radius was overstated:
-#      a pre-fix exit 3 is explained by this defect only when the caller passed the
-#      flag. What is measured on the other side is that the CLI itself prints
-#      `Notice: Detected claude environment. Use 'coderabbit review --agent' ...`
-#      on every run inside an agent session, so the mode is recommended by the
-#      vendor to exactly the caller most likely to be running this wrapper — which
-#      is why "one of five" is a scope and not a dismissal.
-#
-#      Kept as a correction rather than a silent reword, on this file's own rule
-#      about design comments that outlive the design. The generalisable part: the
-#      claim was about the CALLERS, and every check in the suite is about this
-#      script, so nothing in the harness could have contradicted it. A frequency
-#      claim needs a count, and the count was one `grep` away for the whole round.
-#
-#      MEASURED, NOT INFERRED, because inferring what a stream carries is precisely
-#      how defect 4 happened. 2026-09-01 on 0.7.5, agent mode, 50s of a real run:
-#      stdout held `{"type":"review_context",...}` then `{"type":"status","phase":
-#      "connecting",...}`, `"phase":"setup"`, `"phase":"analyzing"`; zero lines
-#      matching `elapsed`; and stderr was EMPTY — 0 bytes, which also means the
-#      $out-then-$err fallback of defect 14 has nothing to fall back to in this mode.
-#
-#      The fix reads BOTH shapes and does not sniff the flag. Mode detection by
-#      argument parsing would be a fourth thing to keep in sync with the vendor, and
-#      it is unnecessary: the CLI names its own phase in both modes, more explicitly
-#      in NDJSON than in prose. `grep -E 'elapsed|"phase":'` takes the last line of
-#      either shape, and `stuck` now tests the connect phase in both vocabularies. A
-#      mode emitting neither still lands on `unknown`, which is where it was.
-#
-#      ELEVENTH TEST HOLE, and it is A MODE NO FIXTURE RAN — the closest sibling to
-#      defect 12's inherited environment, in that the harness never chose it. Every
-#      fake in the suite emits prose progress lines, including `fake_found_issues`,
-#      whose entire job is the findings path this defect breaks; that case is green
-#      against the buggy script because it speaks the mode the bug does not affect.
-#      `fake_agent_findings` and `fake_agent_hang` emit the NDJSON measured above and
-#      nothing else.
-#
-#  16. THE REFUSAL'S OWN DISPLAY ORDERED BY FILE, SO IT COULD NOT ANSWER THE
-#      QUESTION ITS MESSAGE ASKED. Its own class, and the shortest way to say why it
-#      is not defect 14 again: 14 was a wrong VERDICT, this was a correct verdict
-#      printed above a block the reader cannot use to check it. The refusal ran
-#      `cat "$out" "$err" | tr '\r' '\n' | tail -n 15` — `cat` orders by file, so a
-#      single stale connect-phase line in `$err` printed after every later-phase line
-#      in `$out`, and the display's last line was not the run's last line. Directly
-#      beneath it the message said "its last phase above was still the connect one",
-#      and both skills instruct the operator to overrule an exit 3 by reading this
-#      block. So the one reader with no way around it was handed the one arrangement
-#      that cannot settle the question, in the round after the same ordering was
-#      removed from the verdict two hundred lines up.
-#
-#      Fixed with two labelled sections in the verdict's own order — stdout, then
-#      stderr — rather than a merge with a sort, because there is no shared clock
-#      across two capture files and inventing an interleaving would be defect 4's
-#      mistake (asserting what a stream carries) relocated to the display layer.
-#      Discarding `$err` would also have "fixed" it and would lose a diagnostic the
-#      vendor chose to emit, which is defect 10's rule.
-#
-#      TWELFTH TEST HOLE, and it is A READER NO ASSERTION MODELLED. Every case in the
-#      suite asserts on the wrapper's MESSAGES — exit status, a sentence, which
-#      stream it went to — and the reviewer-output block is the one part of the
-#      output whose whole purpose is to be interpreted by a human rather than
-#      matched. Nothing was blind in the fixtures this time and nothing was merged in
-#      the harness: the block was simply outside what the suite considered output.
-#      The new case runs a fake whose stdout reaches a later phase while its stderr
-#      holds one connect-phase line, and asserts the LAST line of the stdout section
-#      names the later phase; against the concatenating version the sections do not
-#      exist and it is red on that case and no other.
+# Most of this header used to be that log. On 2026-08-31 the header alone was 588 comment
+# lines and the whole file 951, against 229 executable ones — measured, not estimated: run
+# `git show <the commit before the log moved>:scripts/bounded-vendor-review.sh` and count
+# lines whose first non-space character is `#`, minus the shebang. And it was mirrored, in
+# prose and never verbatim, into four other
+# documents, which is a second staleness surface on top of the first. Its summary
+# arithmetic went stale in three places at once, twice; two review rounds went on nothing
+# but those numbers, and two more on the check written to catch them and on that check's
+# own defects — four whole rounds spent inside a loop about the commentary. So
+# BOTH header self-checks are gone with the enumeration they read: the one that parsed
+# these ordinals, and the one that banned absolute suite totals. Nothing now fails when a
+# count in a comment goes stale. One copy cannot disagree with itself — a structural
+# guarantee where those were mechanical ones, and weaker on purpose.
 #
 # 120s for the connect is not a guess about how long connecting should take —
 # it is a claim that connecting does not take two minutes. NOT VERIFIED as a
@@ -595,7 +191,7 @@ set -uo pipefail
 # something that does, and a child inherits them. Refusing keeps the whole chain
 # honest instead of only this process.
 # `${!v+x}` asks whether the variable is SET, not whether it has content. This was
-# `[ -n "${!v:-}" ]` until 2026-09-01 — defect 6 in the header — and an explicitly
+# `[ -n "${!v:-}" ]` until 2026-09-01 — defect 6 of the log — and an explicitly
 # empty value walked straight through it. Empty is not harmless: `GIT_DIR=''` makes
 # git fail with `fatal: not a git repository: ''` rather than reading elsewhere, and
 # `GIT_INDEX_FILE=''` makes git report every tracked file as deleted. Same family as
@@ -628,6 +224,7 @@ CR_BIN="${CR_BIN-coderabbit}"
 TOTAL_CAP="${TOTAL_CAP-900}"
 CONNECT_CAP="${CONNECT_CAP-120}"
 POLL="${POLL-5}"
+ROUND_CAP="${ROUND_CAP-3}"
 # `${HOME:+...}` rather than a bare `$HOME`, and this one is defect 12 — the one
 # status this file promises never to use, produced by the line that builds a
 # default. Under `set -u` an UNSET HOME aborts the script here with
@@ -643,6 +240,8 @@ POLL="${POLL-5}"
 # answer for both: a log root of `/` degrades connect_verdict() to `unknown`
 # forever, which is the early kill switched off again (defect 3's shape).
 LOG_DIR="${CR_LOG_DIR-${HOME:+$HOME/.coderabbit/logs}}"
+# Same `${HOME:+...}` form and the same reason, one variable later.
+ROUND_DIR="${VENDOR_ROUND_DIR-${HOME:+$HOME/.claude/vendor-review-rounds}}"
 
 # THE REFUSAL BELOW CANNOT SPEAK FOR THIS CASE, and letting it try was a defect of
 # its own — raised by the PR-side review on 2026-09-01, one round after the HOME
@@ -662,12 +261,20 @@ LOG_DIR="${CR_LOG_DIR-${HOME:+$HOME/.coderabbit/logs}}"
 # `${CR_LOG_DIR+x}` asks whether it is SET, not whether it has content — the same
 # distinction that made defect 12 and the sibling's twelfth round, and the reason
 # `CR_LOG_DIR=` still reaches the generic branch below, where the message is true.
-if [ -z "${CR_LOG_DIR+x}" ] && [ -z "${HOME:-}" ]; then
-  echo "STOP: cannot build a default CR_LOG_DIR, because HOME is unset or empty" >&2
-  echo "      and CR_LOG_DIR was not set either. Set CR_LOG_DIR explicitly, or" >&2
-  echo "      set HOME. This is exit 2 and never exit 1: the CLI spends 1 on real" >&2
-  echo "      findings, so a 1 from here would read as a review that happened." >&2
-  exit 2
+#
+# A LOOP OVER BOTH HOME-DERIVED DEFAULTS rather than one branch about CR_LOG_DIR,
+# since ROUND_DIR was added on the same expansion. Naming the variable that is
+# actually missing is the entire content of this refusal, so a second default
+# quietly answered for by the first one's message would be defect 13 again.
+if [ -z "${HOME:-}" ]; then
+  for v in CR_LOG_DIR VENDOR_ROUND_DIR; do
+    [ -n "${!v+x}" ] && continue
+    echo "STOP: cannot build a default $v, because HOME is unset or empty" >&2
+    echo "      and $v was not set either. Set $v explicitly, or" >&2
+    echo "      set HOME. This is exit 2 and never exit 1: the CLI spends 1 on real" >&2
+    echo "      findings, so a 1 from here would read as a review that happened." >&2
+    exit 2
+  done
 fi
 
 # CR_BIN and LOG_DIR are not numbers, so the numeric loop below cannot speak for
@@ -676,7 +283,7 @@ fi
 # where nothing matches and the connect verdict degrades to "unknown" forever —
 # i.e. the early kill switched off again, which is the defect this script was
 # just fixed for.
-for pair in "CR_BIN:$CR_BIN" "CR_LOG_DIR:$LOG_DIR"; do
+for pair in "CR_BIN:$CR_BIN" "CR_LOG_DIR:$LOG_DIR" "VENDOR_ROUND_DIR:$ROUND_DIR"; do
   case "${pair#*:}" in
     '')
       echo "STOP: ${pair%%:*} is set but empty. Unset it to take the default," >&2
@@ -699,6 +306,23 @@ CONNECT_PHASE='Connecting to CodeRabbit'
 # CLI still names its own phase in that mode, more explicitly than in prose; the
 # detector reads both shapes and needs no flag-sniffing to tell which one it is in.
 CONNECT_PHASE_AGENT='"phase":"connecting"'
+
+# ROUND_CAP is a COUNT and not a duration, so it is refused here rather than by the
+# loop below: that loop's message says "a whole number of seconds", which would be
+# false about this variable, and a refusal that misdescribes what it wants is the
+# shape of defect 13 — right status, wrong diagnosis, operator sent the wrong way.
+case "$ROUND_CAP" in
+  '' | *[!0-9]*)
+    echo "STOP: ROUND_CAP must be a whole number of reviews, got '$ROUND_CAP'." >&2
+    exit 2
+    ;;
+esac
+[ "$ROUND_CAP" -gt 0 ] || {
+  echo "STOP: ROUND_CAP must be greater than 0, got '$ROUND_CAP'. There is no" >&2
+  echo "      value that means 'do not count' — that is what an off switch would" >&2
+  echo "      be, and a bound with an off switch is the paragraph this replaced." >&2
+  exit 2
+}
 
 for pair in "TOTAL_CAP:$TOTAL_CAP" "CONNECT_CAP:$CONNECT_CAP" "POLL:$POLL"; do
   name="${pair%%:*}" val="${pair#*:}"
@@ -724,6 +348,455 @@ command -v "$CR_BIN" >/dev/null 2>&1 || {
   exit 2
 }
 
+# --- THE ROUND CAP ------------------------------------------------------------
+#
+# Keyed on the physical working directory and the branch. `pwd -P` is a builtin and
+# cannot fail into a shared bucket; `git rev-parse` CAN fail, and when it does the
+# key falls back to the literal `no-branch`, which merges every branch in that
+# directory into one counter. That is over-refusal, i.e. the safe direction, and it
+# is stated rather than left for someone to discover: a broken git makes the cap
+# stricter, never absent.
+#
+# The state lives under a `cksum` of the key so a deep path cannot overflow a
+# filename, and EVERY key that lands on that hash is appended to a `key` file in the
+# directory so a collision is READABLE instead of merely suspected. A collision shares
+# a budget, which is again over-refusal. Appended, and never overwritten: the write was
+# a `>` for one round, which made a collision read exactly like its absence — see the
+# comment on the write itself.
+#
+# `cksum` IS AN EXTERNAL COMMAND, AND THE PARAGRAPH ABOVE ENUMERATED TWO FAILURE
+# PATHS WHILE THE LINE BELOW HAD THREE. An unreachable `cksum` — a restricted PATH
+# is the realistic trigger, and `.github/workflows/guard-suites.yml` in the template
+# repo builds one on purpose — leaves the substitution EMPTY, which is not a
+# degraded key, it is ONE BUCKET FOR EVERY KEY: every directory and every branch
+# then shares one budget, and a branch that has had no review at all refuses with
+# exit 4. That is a wrong verdict rather than a late one, i.e. the same class as the
+# write probe below and NOT the same class as the `no-branch` fallback, which is
+# still over-refusal within one directory. So an empty hash refuses here.
+#
+# A ROUND IS A CLAIMED SLOT, NOT AN INCREMENTED COUNTER, and that is the whole
+# design of this block. It WAS a counter until the PR-side review on 2026-09-01
+# read the two lines apart: `round_count=$(head -n1 ...)`, the cap test, and then a
+# write after the review are three separate steps with a vendor review sitting in
+# the middle of them, so two wrappers could both read 2, both pass the test, both
+# send a diff, and both write 3. A fourth review under a cap of three — this file's
+# signature defect, an advertised bound that was not the one advertised, in the
+# block written to stop that class of thing happening to the review process.
+#
+# And concurrency here is the ORDINARY case, not a tail risk: defect 1 was found
+# because two gates running at once is how this machine is normally used, and it was
+# measured, two new logs 79s apart. A TOCTOU whose window is the length of a vendor
+# review is not narrow.
+#
+# So admission is one atomic act. Each round is a file named `1`..`ROUND_CAP`,
+# created under `set -C` — an O_EXCL create, which exactly one process can win — and
+# claiming the lowest free number IS being admitted. No count is parsed, so there is
+# no corrupt count to guess about; the number of claimed slots is the count.
+#
+# The claim is RELEASED on every path that is not a verdict, from the EXIT trap, so
+# a cap kill or a vendor failure still spends nothing. What a `kill -9` of the
+# wrapper leaks is one held slot, i.e. a refusal arriving one round early — the
+# direction this file always chooses, and the escape hatch for it is the same
+# `ROUND_RESET=1` as everything else here.
+round_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" || round_branch=''
+[ -n "$round_branch" ] || round_branch='no-branch'
+round_key="$(pwd -P)|$round_branch"
+round_key_hash="$(cksum <<<"$round_key" | tr -cd '0-9' | cut -c1-20)"
+[ -n "$round_key_hash" ] || {
+  echo "STOP: could not hash the round key, so the round cap would share one budget" >&2
+  echo "      across every directory and branch and could refuse a branch that has" >&2
+  echo "      had no review. Nothing ran. Is 'cksum' on PATH?" >&2
+  exit 2
+}
+round_state="$ROUND_DIR/$round_key_hash.rounds"
+
+mkdir -p "$round_state" 2>/dev/null || {
+  echo "STOP: cannot create the round-count directory $round_state, so the round" >&2
+  echo "      cap cannot be enforced and this refuses rather than proceed" >&2
+  echo "      uncounted. Set VENDOR_ROUND_DIR somewhere writable." >&2
+  exit 2
+}
+# WRITABILITY IS PROBED SEPARATELY, and not folded into the claim, because a failed
+# `set -C` redirect cannot say WHY it failed: EEXIST (this slot is taken, try the
+# next) and EACCES (nothing here can be written, the cap is unenforceable) arrive as
+# the same non-zero status. Without this probe a read-only state directory would
+# exhaust the loop and report exit 4 — "the branch is out of rounds" over a branch
+# that has had none, which is a wrong verdict rather than a late one. The probe name
+# carries `$$` so two concurrent wrappers cannot collide on it.
+: >"$round_state/.probe.$$" 2>/dev/null || {
+  echo "STOP: cannot write inside $round_state, so the round cap cannot be" >&2
+  echo "      enforced and this refuses rather than proceed uncounted. Set" >&2
+  echo "      VENDOR_ROUND_DIR somewhere writable." >&2
+  exit 2
+}
+rm -f "$round_state/.probe.$$"
+# THE `key` FILE IS APPEND-IF-ABSENT AND IS NEVER OVERWRITTEN. It was one `>` until
+# 2026-09-02, so the SECOND colliding key replaced the first and the paragraph above —
+# promising that a collision is "READABLE instead of merely suspected" — described a
+# diagnostic that did not exist. An operator inspecting `key` after an unexplained exit
+# 4 saw their own key, alone, which is byte-for-byte the reading a NON-colliding
+# directory produces. Not a wrong bound and not a wrong verdict: the verdict was right
+# and the one artifact for checking it was silently the wrong artifact, which is the
+# class defect 16 is. Found by the vendor leg on the round that shipped the empty-hash
+# refusal above, in the block that refusal was added to.
+#
+# MEMBERSHIP, not "differs from what is in the file". The obvious form compares the
+# file's contents against this key and appends when they differ, which is correct
+# exactly once: with two keys recorded, every subsequent run under EITHER of them
+# differs from the whole file, appends again, and the note below fires forever over a
+# file growing without bound. A diagnostic that cries collision on every run is one
+# nobody reads, which is how the file stops being readable a second time.
+if [ ! -e "$round_state/key" ] || ! grep -qxF "$round_key" "$round_state/key" 2>/dev/null; then
+  printf '%s\n' "$round_key" >>"$round_state/key" 2>/dev/null || true
+fi
+# Said on EVERY run while the file holds more than one key, not only on the run that
+# discovered the second one. The operator who needs this sentence is the one staring at
+# an exit 4 on a branch they have not reviewed, and that is rarely the run that
+# collided. `grep -c ''` rather than `wc -l` because `wc` pads its output and `[ -gt ]`
+# on a padded number is an interpreter-dependent answer, which is the same defect the
+# reachable-command floor's `[ -x ]` note records.
+#
+# COUNTED OVER DISTINCT KEYS, NOT LINES, because the check-and-append above is two steps
+# and this script's whole design admits concurrent wrappers — the suite races six of them
+# for one round. Two arriving together both find the key absent and both append it, and
+# a line count then reports a SHARED BUDGET over one key present twice. That is this
+# file's own recurring defect wearing the newest clothes: a false positive
+# indistinguishable from the real reading, on the one artifact that exists to tell them
+# apart, and it trains the operator to ignore the note. Raised by the vendor leg on the
+# round that added the note.
+#
+# `sort -u` rather than a lock or an O_EXCL per-key file, and the rejected options are
+# the interesting half. A file named after a HASH of the key is the obvious atomic
+# registration, and it would merge two COLLIDING keys into one filename — reintroducing,
+# in the fix, the exact blindness this file exists to make readable. A `mkdir` mutex
+# would work and is declined for cost: it serialises a path that has no other lock, to
+# prevent a duplicate LINE, once. The residual is stated rather than closed: a racing
+# pair can leave one duplicate line in `key`. It cannot leave two, because the loser of
+# the next race finds the key present; it cannot tear a line, because each `printf` is a
+# single short write to an O_APPEND descriptor; and it can no longer be read as a
+# collision, which was the only harm in it.
+key_count=$(sort -u "$round_state/key" 2>/dev/null | grep -c '') || key_count=0
+[ -n "$key_count" ] || key_count=0
+if [ "$key_count" -gt 1 ]; then
+  echo "note: this round budget is SHARED. $key_count keys hash to $round_state," >&2
+  echo "      so every one of them counts against the same ROUND_CAP=$ROUND_CAP." >&2
+  echo "      They are listed in $round_state/key; ROUND_RESET=1 clears the slots." >&2
+fi
+
+# A RESET MUST NOT DELETE A LIVE WRAPPER'S SLOT, because doing so breaches the very
+# cap it is clearing. Wrapper A holds slot 1 and is reviewing; a reset frees 1; B
+# claims 1 and reviews; A finishes without a verdict and its release deletes what is
+# now B's file; C claims 1 while B is still going. Three reviews under a cap of one,
+# reached by an operator clearing a count — defect 18, found by the vendor leg on the
+# round that shipped defect 17's fix, in that fix's own block.
+#
+# So the reset asks who holds each slot and refuses while anyone does. The two ways
+# that question can be answered wrongly point in OPPOSITE directions, which is the
+# whole reason this is a function and not one `kill -0`: a recycled pid makes a leaked
+# slot read as live, which refuses a reset that was safe and costs one `force`; a slot
+# held by ANOTHER USER reads as EPERM, which reads as dead and permits a reset that
+# was not safe. Only the second manufactures a cap breach, so every answer that is not
+# an unambiguous "gone" is treated as LIVE.
+#
+# THIS PARAGRAPH DESCRIBED THAT PROTECTION BEFORE THE CODE PROVIDED IT. The previous
+# round wrote "an unparseable or unreadable slot is treated as LIVE" and then tested
+# `kill -0 "$pid" 2>/dev/null && live` — and an EPERM pid is neither unparseable nor
+# unreadable, it is a perfectly readable pid whose probe returns 1. Measured 2026-09-02:
+# `kill -0 1` (root's launchd, as a non-root user) exits 1 saying "operation not
+# permitted", indistinguishable by status from pid 999999's "no such process". So the
+# comment read as considered while the code fell the unsafe way — the log's own
+# recurring shape, in the sentence claiming to have handled it. Reachable rather than
+# exotic: VENDOR_ROUND_DIR is documented as configurable, and pointing it at a shared
+# path on a multi-user host is what puts another user's pid in the file.
+#
+# `ps -p` is the second opinion because it answers across users where `kill -0` cannot
+# (measured: `ps -p 1` exits 0, `ps -p 999999` exits 1). It is consulted only AFTER the
+# builtin says "not mine", so the ordinary same-user path still runs with no external
+# command in it, and DEAD requires `ps` to exit exactly 1 — a missing binary, a usage
+# error, or any other status is LIVE, because a helper whose failure is indistinguishable
+# from "found nothing" is the one thing this file has learned not to put above a decision.
+pid_is_live() {
+  kill -0 "$1" 2>/dev/null && return 0
+  ps -p "$1" >/dev/null 2>&1
+  case "$?" in
+    1) return 1 ;;  # the only unambiguous "gone"
+    *) return 0 ;;  # alive, or unanswerable — both are LIVE
+  esac
+}
+
+# THE SCAN AND THE DELETE ARE NOT ONE OPERATION, so a wrapper can claim a slot in
+# between them and have its live claim deleted — after which a third wrapper claims
+# that same name while the second is still reviewing. Two reviews under a cap of one,
+# reached without anyone doing anything wrong: the scan was honest and the delete was
+# honest, and the gap between them is the whole defect. Raised by the vendor leg on the
+# round that fixed the EPERM half above, in the block that fix is in.
+#
+# CLOSED WITH THE PRIMITIVE ALREADY HERE, not a new lock. `.resetting` is created under
+# `set -C` — so two concurrent resets cannot both proceed — and it is created BEFORE the
+# liveness scan, while the claim loop below refuses while it exists.
+#
+# THAT ORDERING IS HALF THE ARGUMENT, AND THIS COMMENT CLAIMED IT WAS THE WHOLE ONE.
+# What it said until 2026-09-02: a wrapper past the claim loop's check must have got there
+# before `.resetting` existed, "so its slot file already exists when the scan runs, so the
+# scan sees it… there is no third case." The middle step does not follow. PASSING THE CHECK
+# IS NOT THE SAME AS HAVING CLAIMED, and everything between them is a window: wrapper tests
+# `-e` and finds nothing, reset creates its marker, reset scans and sees no live slot,
+# wrapper claims, reset deletes a live claim, a third wrapper takes that name. Two reviews
+# under a cap of one, with no `force` and no stale marker anywhere — the third case, and it
+# was reachable for as long as the sentence denying it stood. (The takeover path's
+# `rm`-then-create gap below is a second, narrower route into the same window.) Raised by
+# the PR-side review 2026-09-02; it is the fourth time the mechanism added to close a gap
+# in this cap has contained one.
+#
+# The other half is now below the claim: CLAIM, THEN VERIFY. A wrapper re-reads the marker
+# AFTER its slot exists and releases the slot if a live reset has appeared, which makes the
+# two cases exhaustive at last. If the reset's scan missed the slot, the claim came after
+# the marker existed, so the wrapper's own re-read sees it and stands down; if the scan saw
+# the slot, a non-force reset refuses. `force` still deletes a live claim, deliberately and
+# with the refusal message saying so. Closing the force case as well needs a lock held
+# across the review, which is declined for the reason it has always been: it would
+# serialise concurrent gates for up to TOTAL_CAP, the hang this script exists to prevent.
+#
+# A reset that dies mid-way would otherwise wedge every future run, which is the failure
+# this branch is named after. So `.resetting` carries its owner's pid and is judged by
+# the same `pid_is_live` as a slot: a stale one from a dead process is taken over rather
+# than obeyed. No new trust assumption — if that test can be wrong here it is already
+# wrong one function up.
+#
+# ONLY `1` AND `force` ARE RESET REQUESTS. Until this check existed every non-empty value
+# was one, so `ROUND_RESET=0` — which reads as "off" to anyone who writes it — cleared the
+# branch's slots, and so did a misspelling. That is this file's own defect once more: a
+# value whose plain meaning is the opposite of what it did. An EMPTY value stays "off"
+# rather than joining the caps' set-but-empty refusal, and that difference is argued
+# rather than assumed: an empty cap silently drops a bound the operator tried to set,
+# while an empty `ROUND_RESET` does the safe thing the operator's `=` reads as.
+#
+# The message expands `${ROUND_RESET-}` rather than `$ROUND_RESET` because the `''` arm is
+# the only thing keeping this branch unreachable with the variable unset, and an error path
+# that would itself abort on `set -u` if that arm ever moved is the wrong way to be wrong.
+case "${ROUND_RESET-}" in
+  ''|1|force) : ;;
+  *)
+    echo "STOP: ROUND_RESET=${ROUND_RESET-} is not a reset request this understands." >&2
+    echo "      Use ROUND_RESET=1, or ROUND_RESET=force to clear a slot that reads" >&2
+    echo "      as live. Nothing was cleared and no review ran — refusing rather" >&2
+    echo "      than guessing, because guessing here DELETES the cap's state." >&2
+    exit 2
+    ;;
+esac
+if [ -n "${ROUND_RESET-}" ]; then
+  round_gate="$round_state/.resetting"
+  round_gate_token="$$.$RANDOM.$RANDOM"
+  # Invoked from the EXIT trap below and from the end of the block, which no version of
+  # the linter can see: 0.9.0 reports SC2317 across the body and 0.10+ reports SC2329 on
+  # the definition, and suppressing only one of them is how a green laptop shipped a red
+  # CI job (defect 21). An explanatory line must not BEGIN with the linter's own name —
+  # that parses as a directive, SC1073, and the first draft of this comment did it.
+  # shellcheck disable=SC2329,SC2317
+  round_gate_drop() {
+    case "$(cat "$round_gate" 2>/dev/null)" in
+      *"token $round_gate_token") rm -f "$round_gate" 2>/dev/null ;;
+    esac
+  }
+  if ! (set -C; printf 'pid %d token %s\n' "$$" "$round_gate_token" >"$round_gate") 2>/dev/null; then
+    round_gate_pid="$(cat "$round_gate" 2>/dev/null)" || round_gate_pid=''
+    round_gate_pid="${round_gate_pid#pid }"
+    round_gate_pid="${round_gate_pid%% *}"
+    case "$round_gate_pid" in
+      ''|*[!0-9]*) round_gate_pid='' ;;
+    esac
+    if [ -n "$round_gate_pid" ] && pid_is_live "$round_gate_pid"; then
+      echo "STOP: another reset is in progress (pid $round_gate_pid). Nothing was" >&2
+      echo "      cleared and no review ran. Wait for it and try again." >&2
+      exit 2
+    fi
+    # Stale: its owner is gone, or it is unreadable and no live pid claims it. TAKING IT
+    # OVER IS NOT AN OVERWRITE. The first version wrote straight over the marker, so two
+    # resets that both judged it stale both proceeded, and then the first one's delete
+    # removed the second one's marker and left it scanning with the door open — defect 20
+    # again, through its own repair. Remove and re-create under `set -C`, so exactly one
+    # of them creates the file, and refuse if that create is lost.
+    rm -f "$round_gate" 2>/dev/null
+    if ! (set -C; printf 'pid %d token %s\n' "$$" "$round_gate_token" >"$round_gate") 2>/dev/null; then
+      echo "STOP: another reset took the stale marker in $round_state first, or it" >&2
+      echo "      cannot be replaced. Nothing was cleared and no review ran." >&2
+      exit 2
+    fi
+    echo "note: took over a stale reset marker in $round_state." >&2
+  fi
+  # From here every exit must drop the marker, or the next run refuses forever — and it
+  # must drop only its OWN, which is what makes the residual above harmless rather than
+  # merely narrow. If a racing reset does replace this marker in the two syscalls between
+  # the create and here, ITS marker is the one standing, and the claim loop below is shut
+  # for as long as either of them runs. A path delete is what breaks that; an ownership
+  # delete cannot.
+  trap round_gate_drop EXIT
+  # ARITHMETIC, NOT `seq 1 "$ROUND_CAP"`, AND THE DIFFERENCE IS A VERDICT. All three
+  # round-cap loops read it from an external command until 2026-09-02, and an unreachable
+  # `seq` makes `$(seq ...)` empty, which makes a `for` over it run ZERO times — measured,
+  # not reasoned: `PATH=/nonexistent; for i in $(seq 1 3); do n=$((n+1)); done` leaves n=0.
+  # So the claim loop below found no free slot and refused with exit 4, "this branch has
+  # already had ROUND_CAP reviews", on a branch that had had none; this scan found nothing
+  # live so a non-force reset never refused; and the delete below deleted nothing while
+  # printing "reset to 0" at exit 0. Three advertised outcomes, none of them the one that
+  # happened, from one missing binary — the same shape as the empty `cksum` hash one round
+  # earlier, and the reason this is a REMOVED DEPENDENCY rather than a fourth refusal:
+  # `ROUND_CAP` is already a validated positive integer above, so the shell can count to it
+  # with no command that can be missing. Raised by the PR-side review 2026-09-02.
+  round_live=''
+  round_n=1
+  while [ "$round_n" -le "$ROUND_CAP" ]; do
+    if [ ! -e "$round_state/$round_n" ]; then round_n=$((round_n + 1)); continue; fi
+    round_held="$(cat "$round_state/$round_n" 2>/dev/null)" || round_held=''
+    round_pid="${round_held#pid }"
+    round_pid="${round_pid%% *}"
+    case "$round_pid" in
+      ''|*[!0-9]*) round_live="$round_live $round_n(unreadable)" ;;
+      *) pid_is_live "$round_pid" && round_live="$round_live $round_n(pid $round_pid)" ;;
+    esac
+    round_n=$((round_n + 1))
+  done
+  if [ -n "$round_live" ] && [ "$ROUND_RESET" != force ]; then
+    echo "STOP: ROUND_RESET refused — a round is still held:$round_live" >&2
+    echo "      Clearing it would let another wrapper claim that same slot while" >&2
+    echo "      this one is still reviewing, which breaks the cap rather than" >&2
+    echo "      resetting it. Wait for the run to finish, or if you are certain" >&2
+    echo "      nothing is running — a 'kill -9' leaks a slot, and a recycled pid" >&2
+    echo "      reads as live — use ROUND_RESET=force." >&2
+    exit 2
+  fi
+  # Only the slot files. `key` stays, because it is the thing that makes a hash
+  # collision readable and a reset is not a reason to lose it, and `.resetting` stays
+  # until this process exits because it is what keeps the claim loop out.
+  round_n=1
+  while [ "$round_n" -le "$ROUND_CAP" ]; do
+    rm -f "$round_state/$round_n"
+    round_n=$((round_n + 1))
+  done
+  echo "note: ROUND_RESET set — round count for $round_branch reset to 0." >&2
+  round_gate_drop
+  trap - EXIT
+fi
+
+# THE CLAIM. `set -C` makes the redirect O_EXCL, so of two wrappers reaching the
+# same free slot at the same moment exactly one creates it and the other moves on.
+# A stray file in this directory that is not named 1..ROUND_CAP is ignored rather
+# than refused: only these names can hide a slot, so a garbage byte cannot switch
+# the cap off — which is what the old numeric counter had to fail closed about.
+#
+# The slot carries the pid, so a reset can ask whether its holder is alive, and a
+# token, so the release can ask whether the slot is still the one this process
+# created. `$$` alone answers neither question across a `ROUND_RESET=force`.
+# REFUSE WHILE A RESET IS MID-FLIGHT. This is the other half of the `.resetting`
+# ordering above and is useless without it: claiming here while a reset is between its
+# scan and its delete is exactly how a live claim gets deleted. Exit 2 rather than 4 —
+# nothing was counted and nothing is exhausted, this is "ask again in a moment". A stale
+# marker is judged by pid, not obeyed on sight, for the same reason as above.
+if [ -e "$round_state/.resetting" ]; then
+  round_gate_was="$(cat "$round_state/.resetting" 2>/dev/null)" || round_gate_was=''
+  round_gate_pid="${round_gate_was#pid }"
+  round_gate_pid="${round_gate_pid%% *}"
+  case "$round_gate_pid" in
+    ''|*[!0-9]*) round_gate_pid='' ;;
+  esac
+  if [ -z "$round_gate_pid" ] || pid_is_live "$round_gate_pid"; then
+    echo "STOP: a ROUND_RESET is in progress for this branch, so no round was" >&2
+    echo "      claimed and NO VENDOR REVIEW HAPPENED. Claiming a slot now is how" >&2
+    echo "      a reset comes to delete a live claim. Re-run in a moment." >&2
+    [ -n "$round_gate_pid" ] && echo "      Holder: pid $round_gate_pid" >&2
+    exit 2
+  fi
+  # THIS SIDE DOES NOT DELETE THE MARKER, AND IT DID FOR TWO ROUNDS. First as a path
+  # delete, then as a re-read followed by a delete — and the second was narrower rather
+  # than closed, because POSIX has no unlink-that-checks-content: whatever gap is left
+  # between the last read and the `rm` is a gap in which a new reset takes the same stale
+  # marker over (the takeover path removes and re-creates the file), after which this
+  # delete removes a LIVE reset's marker and the claim loop below is open for every
+  # wrapper that arrives while that reset scans. `mv` does not fix it either — an atomic
+  # rename moves whichever inode is at that name, so it steals a live marker just as
+  # readily and leaves no un-racy way to put it back.
+  #
+  # So the fix is not a better delete, it is one fewer writer: MARKER MUTATION BELONGS
+  # ONLY TO THE RESET PATH, which serialises it with `set -C` and an ownership token.
+  # Leaving a stale marker in place costs nothing here — its holder is dead, so nothing
+  # is scanning, and a claim made under it is a claim made with the door shut against
+  # nobody. It is cleared by the next reset's takeover, which is the one writer allowed
+  # to touch it. The visible cost is a marker that outlives its owner until then, which
+  # is why this says so on every run rather than clearing it quietly.
+  #
+  # The re-read below survives the delete it used to guard, because it is worth more than
+  # that: a marker that changed hands between the liveness test and here means a reset is
+  # live NOW, and the honest answer is the refusal above rather than a claim made on a
+  # verdict that has expired.
+  if [ "$(cat "$round_state/.resetting" 2>/dev/null)" != "$round_gate_was" ]; then
+    echo "STOP: the reset marker changed hands while it was being read, so no round" >&2
+    echo "      was claimed and NO VENDOR REVIEW HAPPENED. Re-run in a moment." >&2
+    exit 2
+  fi
+  echo "note: ignoring a stale reset marker in $round_state (pid $round_gate_pid is" >&2
+  echo "      gone). Only a ROUND_RESET run clears it; this path never deletes it." >&2
+fi
+
+round_claim=''
+round_count=0
+round_token="$$.$RANDOM.$RANDOM"
+round_n=1
+while [ "$round_n" -le "$ROUND_CAP" ]; do
+  if (set -C; printf 'pid %d token %s\n' "$$" "$round_token" >"$round_state/$round_n") 2>/dev/null; then
+    round_claim="$round_state/$round_n"
+    round_count="$round_n"
+    break
+  fi
+  round_n=$((round_n + 1))
+done
+
+# RELEASE IS AN OWNERSHIP TEST, NOT A PATH TEST. `rm -f "$round_claim"` deletes
+# whatever is at that name now, which after a `ROUND_RESET=force` is another
+# wrapper's live claim — the same breach the reset refusal above exists to prevent,
+# arriving from the other end. Comparing the token means the worst this can do is
+# leave a slot behind, which refuses a round early.
+# Invoked from the EXIT trap string below, not by name, which no shellcheck version can
+# see. BOTH codes are needed and neither is redundant: 0.9.0 (what CI installs from apt)
+# reports SC2317 on every line of the body, and 0.10+ (what brew ships, so what runs
+# locally) reports SC2329 once on the definition. Suppressing only the local one is how
+# this reached CI green-on-this-laptop and red-on-Linux — see the severity note in the
+# workflow, which is the other half of that fix.
+# shellcheck disable=SC2329,SC2317
+release_claim() {
+  [ -n "$round_claim" ] || return 0
+  local held
+  held="$(cat "$round_claim" 2>/dev/null)" || return 0
+  case "$held" in
+    *"token $round_token") rm -f "$round_claim" 2>/dev/null ;;
+  esac
+  return 0
+}
+
+# Released unless the verdict path below sets round_keep. Installed the instant the
+# claim exists, so nothing between here and the launch can exit holding it.
+round_keep=''
+out=''
+err=''
+# shellcheck disable=SC2064  # $out/$err are set later; expansion must be at trap time
+trap 'rm -f "$out" "$err" 2>/dev/null; [ -n "$round_keep" ] || release_claim' EXIT
+
+if [ -z "$round_claim" ]; then
+  echo "STOP: this branch has already had $ROUND_CAP vendor reviews (ROUND_CAP=$ROUND_CAP)." >&2
+  echo "      Key: $round_key" >&2
+  echo "      Rounds: $round_state" >&2
+  echo >&2
+  echo "      NO VENDOR REVIEW HAPPENED, and that is the point. Past this many the" >&2
+  echo "      rounds stop being about the change and start being about the last" >&2
+  echo "      round — on 2026-09-01 one 229-line script took 25 of them, 11 of" >&2
+  echo "      which changed no behaviour at all. SURFACE THIS TO THE OPERATOR" >&2
+  echo "      rather than working around it: say what the open findings are and" >&2
+  echo "      let them decide whether another round is the right move." >&2
+  echo >&2
+  echo "      If it is: ROUND_CAP=$((ROUND_CAP + 3)) for a deliberate larger" >&2
+  echo "      budget, or ROUND_RESET=1 if this branch is now doing different work." >&2
+  exit 4
+fi
+
 out=$(mktemp) || { echo "STOP: cannot create a temp file; nothing was run." >&2; exit 2; }
 # TWO FILES, because the launch below used `2>&1` into one until 2026-09-01 and
 # `cat "$out"` then replayed the merged stream to our own stdout — defect 10. The
@@ -733,10 +806,13 @@ out=$(mktemp) || { echo "STOP: cannot create a temp file; nothing was run." >&2;
 # layer in, and it is the merged-streams vacuity from defect 7's own harness in the
 # PRODUCTION path: `2>&1` destroys the distinction the caller needs.
 err=$(mktemp) || { echo "STOP: cannot create a temp file; nothing was run." >&2; exit 2; }
-# Inline rather than a `cleanup()` function: shellcheck reports SC2329 on a
-# function only ever reached through `trap`, and a disable comment to keep a
-# one-line wrapper is worse than not having the wrapper.
-trap 'rm -f "$out" "$err"' EXIT
+# The EXIT trap is installed ABOVE, with the round claim, and removes both these
+# files as well as the claim. It used to be installed here, which would now be a
+# defect rather than a tidier place for it: re-arming it at this line would silently
+# drop the release clause, and a mktemp failure would then exit 2 holding a round.
+# Inline rather than a `cleanup()` function: shellcheck reports SC2329 on a function
+# only ever reached through `trap`, and a disable comment to keep a one-line wrapper
+# is worse than not having the wrapper.
 
 # Every pid from $1 downward, parents before children. `pgrep -P` is the only
 # portable way to walk descendants on both macOS and Linux, and it lives here in
@@ -788,10 +864,15 @@ kill_tree() {
 # SC2317 was added to the list on 2026-09-01 because CI FOUND IT AND THIS MACHINE
 # COULD NOT: shellcheck 0.11.0 locally emits only SC2329, while the version on the
 # GitHub runner emits SC2317 on all 15 lines of the body and failed the template
-# repo's `guards` job. Same class as defect 3 in the header — an environment the
-# author does not have is not an environment that does not exist. The workflows
-# repo stayed green throughout, because its CI does not shellcheck these files at
-# all, so the byte-identical twin was linted in exactly one of the two places.
+# repo's `guards` job. Same class as defect 3 of the log — an environment the
+# author does not have is not an environment that does not exist. This paragraph
+# used to end by saying the workflows repo stayed green because its CI did not lint
+# these files at all. That stopped being true when #75 added the step, and the very
+# next function added to this file (`release_claim`) shipped with only SC2329 and
+# turned that step red. A precedent 100 lines away, with the reason spelled out,
+# does not transfer itself — copy the whole list or neither code. (Note the wording:
+# an explanatory line may not BEGIN with the linter's own name, per the paragraph
+# above, and the first draft of this one did, which is a parse error not a finding.)
 # shellcheck disable=SC2329,SC2317
 on_signal() {
   local sig="$1"
@@ -828,6 +909,55 @@ trap 'on_signal HUP' HUP
 # directory must not abort the review; it just means the refusal cannot cite a
 # file.
 pre_logs=$(ls -1 "$LOG_DIR" 2>/dev/null || true)
+
+# CLAIM, THEN VERIFY — the second half of the `.resetting` ordering argued above, and
+# without it that argument had a hole rather than a residual. The check before the claim
+# asks "is a reset running?" and the answer expires the moment it is given; this asks the
+# same question with the slot already on disk, which is the only version of it a reset can
+# be held to. A live reset that appeared in between is one whose scan may have run before
+# this slot existed, so the honest move is to hand the round back rather than review under
+# a marker: exit 2, nothing counted, and the EXIT trap's ownership-checked release frees
+# the slot on the way out, so standing down costs the branch nothing.
+#
+# LAST THING BEFORE THE LAUNCH on purpose. Every line between the claim and here is a line
+# a reset can arrive in, and this is as late as the question can be asked while refusing is
+# still free — one instruction later a vendor round has been spent.
+if [ -e "$round_state/.resetting" ]; then
+  round_late="$(cat "$round_state/.resetting" 2>/dev/null)" || round_late=''
+  round_late_pid="${round_late#pid }"
+  round_late_pid="${round_late_pid%% *}"
+  case "$round_late_pid" in
+    ''|*[!0-9]*) round_late_pid='' ;;
+  esac
+  # Unreadable counts as live, as it does everywhere else here: a marker that cannot be
+  # parsed is a reset that cannot be ruled out, and over-refusing costs a re-run.
+  if [ -z "$round_late_pid" ] || pid_is_live "$round_late_pid"; then
+    echo "STOP: a ROUND_RESET appeared after round $round_count was claimed, so the" >&2
+    echo "      claim was handed back and NO VENDOR REVIEW HAPPENED. That reset may" >&2
+    echo "      have scanned for live rounds before this one existed, and reviewing" >&2
+    echo "      under it is how a live claim gets deleted underneath a running" >&2
+    echo "      review. The round was NOT spent — re-run in a moment." >&2
+    [ -n "$round_late_pid" ] && echo "      Holder: pid $round_late_pid" >&2
+    exit 2
+  fi
+fi
+# AND THE SLOT MUST STILL BE THIS RUN'S. A `ROUND_RESET=force` deletes live claims by
+# design, and a wrapper that reviews holding a deleted slot has left its name free for the
+# next arrival — the cap breach arriving from the far end, silently, because nothing else
+# would ever notice. Comparing the token rather than testing `-e` is what makes this the
+# ownership question and not the existence one: a slot recreated by somebody else is
+# somebody else's round.
+case "$(cat "$round_claim" 2>/dev/null)" in
+  *"token $round_token") : ;;
+  *)
+    echo "STOP: round $round_count was claimed and is no longer this run's — a" >&2
+    echo "      ROUND_RESET=force cleared it, or something else in $round_state" >&2
+    echo "      did. NO VENDOR REVIEW HAPPENED, because reviewing on a slot this" >&2
+    echo "      run no longer holds leaves that slot free for the next wrapper and" >&2
+    echo "      puts two reviews under one cap. Re-run in a moment." >&2
+    exit 2
+    ;;
+esac
 
 # `setsid` where available so the whole process group can be killed; the CLI
 # spawns children and a bare `kill` on the parent leaves them holding the socket.
@@ -910,7 +1040,7 @@ new_logs() {
 # the verdict gate. Reading both is correct whichever stream it turns out to be, and
 # costs only that a diagnostic containing the word `elapsed` could be mistaken for a
 # progress line — which lands on `connected`, the safe side. BOTH, IN ORDER: $out
-# first, $err only if $out has no progress line at all. See defect 14 below for why
+# first, $err only if $out has no progress line at all. See defect 14 of the log for why
 # that ordering is not a preference.
 #
 # TWO CALLERS as of 2026-09-01. The early kill above, live, mid-run; and the verdict
@@ -1202,6 +1332,20 @@ if [ "$cr_status" -ne 0 ] && [ "$reviewer_phase" != "connected" ]; then
   exit 3
 fi
 
+# KEPT HERE AND NOWHERE ELSE — past both verdict branches, on the one path where a
+# review demonstrably happened. The slot was claimed before the launch, so this line
+# is the decision NOT to release it; every exit above releases, and a vendor outage,
+# a bad flag, a cap kill or a signal therefore spends nothing. A findings run
+# (cr_status 1) reaches this line and IS a round: it happened, and it is exactly the
+# round that tends to be followed by another.
+#
+# There is nothing here that can fail. The old shape wrote the counter at this point
+# and could only WARN when that write failed — a review that happened and went
+# uncounted — because refusing over a completed review is the false-refusal
+# direction. Claiming up front removed the choice: the write that can fail now
+# happens before the launch, where refusing it is free.
+round_keep=1
+echo "bounded-vendor-review: round $round_count of $ROUND_CAP for $round_branch." >&2
 echo "bounded-vendor-review: reviewer returned after ${SECONDS}s with exit status ${cr_status}." >&2
 echo "  That status is NOT a verdict — the CLI uses 1 for an unknown flag, for" >&2
 echo "  'not a git repository', and for 'found actionable issues' alike. Read the" >&2
