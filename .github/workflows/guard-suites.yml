@@ -113,9 +113,25 @@ jobs:
           # to diagnose because the failure named the wrong subject. Raised by the
           # PR-side review 2026-09-01.
           #
-          # The names are DERIVED, not guessed: they are what the wrapper and its
-          # suite actually invoke, extracted from both files rather than picked as a
-          # plausible-looking set.
+          # The names are DERIVED, not guessed — and the list was HALF-ENUMERATED
+          # anyway until 2026-09-01, which is this repo's other recurring defect
+          # arriving inside the sentence claiming immunity to it. `wc` was missing,
+          # and the very next line of this block runs `wc -l` through the farm, so
+          # a broken `wc` link would have failed the step with a message about
+          # setsid. Derivation was clearly done over the two scripts and not over
+          # the run block that hosts them.
+          #
+          # Re-derived by extracting COMMAND-POSITION tokens (start of line, or
+          # after `|` `&&` `;` `(` `$(`) from the wrapper, its suite, AND the part
+          # of this block that executes after `export PATH="$shim"`, then keeping
+          # those whose `type -t` is `file`. Stripping comments first is part of the
+          # method rather than tidiness: a plain word-frequency pass over the same
+          # three files returns `say`, `who`, `tidy` and `tree`, because English
+          # prose is full of words that are also binaries on a mac. Two names the
+          # pass surfaces are deliberately NOT here — `ln` runs while the farm is
+          # being built, before the `export`, and `shellcheck` belongs to a later
+          # step with the normal PATH. Adding either would be a floor asserting a
+          # dependency the step does not have.
           #
           # `[ -x ]` ON THE RESOLVED PATH, NOT A BARE `command -v`, and the first
           # version of this check got that wrong in the one direction that mattered.
@@ -131,7 +147,8 @@ jobs:
           # question PATH execution will ask. Same file, same lesson as everything
           # else in these two scripts: the confident inference was the wrong one.
           for req in bash env grep sleep mkdir cat awk head chmod date tr tail \
-                     pgrep find mktemp sort seq sed rm cut ls dirname touch comm; do
+                     pgrep find mktemp sort seq sed rm cut ls dirname touch comm \
+                     wc; do
             p=$(command -v "$req" 2>/dev/null) || p=
             if [ -n "$p" ] && [ -x "$p" ]; then continue; fi
             echo "SHIM FAILED: '$req' is not reachable-and-executable through the" >&2
@@ -139,9 +156,15 @@ jobs:
             echo "to do with setsid" >&2
             exit 1
           done
-          # `find`, not `ls | wc -l`, because SC2012 — actionlint runs shellcheck
-          # over every `run:` block here, so this line is linted like a script.
-          # (Do not start that sentence with the linter's own name: a comment
+          # `find`, not `ls | wc -l`, because SC2012 — the LOCAL pre-push gate runs
+          # actionlint, which runs shellcheck over every `run:` block here, so this
+          # line is linted like a script before it can be pushed. NOT by CI: no
+          # workflow in this repo runs actionlint, and this comment claimed
+          # otherwise until 2026-09-01, when the PR-side review checked. The same
+          # false claim, in the same round, sat in check-speckit-update.yml — see
+          # the note there, which also records why the fix is to correct the
+          # sentence rather than to add the CI step.
+          # (Do not start either sentence with the linter's own name: a comment
           # whose first word is that name parses as a DIRECTIVE, which is
           # SC1072/SC1073 and how this step was red a moment ago.)
           echo "no setsid on PATH; $(find "$shim" -maxdepth 1 -type l | wc -l) links"

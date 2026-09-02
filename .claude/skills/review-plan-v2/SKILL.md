@@ -182,10 +182,10 @@ total, and no figure is repeated here because that figure has gone stale twice �
 with fakes that genuinely `sleep 600`, since a fake that never hangs removes the
 only behaviour worth guarding.
 
-**Fifteen defects have been found in that wrapper. Eleven are every one of them an
+**Sixteen defects have been found in that wrapper. Eleven are every one of them an
 advertised bound — or an advertised verdict — that was not the one advertised; the other
-four are their own classes and are listed anyway, because a tidier pattern would be a
-false one. Not one of the fifteen was found by reasoning about the code.** They are worth listing because they are the shape this leg
+five are their own classes and are listed anyway, because a tidier pattern would be a
+false one. Not one of the sixteen was found by reasoning about the code.** They are worth listing because they are the shape this leg
 fails in. (1) The connect kill required *exactly one* new log file, so a second gate
 running concurrently switched it off and the 120s bound silently became the 900s one.
 (2) The wrapper trapped no signals, so killing the wrapper left `coderabbit review`
@@ -288,7 +288,21 @@ lines, carrying `"phase":"connecting"` then `"phase":"setup"` then `"phase":"ana
 and an **empty** stderr, which also leaves defect 14's `$err` fallback with nothing to fall
 back to here. The detector now matches either shape and sniffs no flag, because the CLI
 names its own phase in both, more explicitly in NDJSON; a mode emitting neither still lands
-on `unknown`, which is where it already was.
+on `unknown`, which is where it already was. (16) **A correct verdict printed directly above
+a block that cannot be used to check it.** The refusal prints the reviewer's own output so
+the operator can overrule the machine — this file tells you to do exactly that — and it built
+that block with `cat "$out" "$err" | tr '\r' '\n' | tail -n 15`. `cat` orders by file, not by
+time, so one stale connect-phase line in stderr printed *after* every later-phase line from
+stdout, under a message saying the reviewer's last phase was "above". Defect 14 removed that
+ordering from the **verdict** and left it in the **display**, in the adjacent block, in the
+round that had just finished explaining why order matters. Its own class: not a wrong bound
+and not a wrong verdict, but the one artifact the documented human override rests on, so a
+reader following the procedure would conclude a working review had wedged at connect. It is
+now two labelled sections, stdout first and stderr second, in the order the verdict reads
+them. The test hole is **a reader no assertion modelled**: every case asserts on the
+wrapper's own *messages*, and this block exists to be interpreted by a human, so it sat
+outside what the harness treated as output at all. When a script prints something for a
+HUMAN to act on, ask which assertion reads it.
 
 Two things from that history generalise past this wrapper. **An exit 3 dated before
 2026-09-01 may have been a false refusal** — defect 4 killed healthy reviews at
@@ -368,27 +382,27 @@ there are two cases rather than one because a wrong fix was available and cheap:
 branch 2 ignore `unknown` satisfies the findings case while switching the guard off for a
 reviewer that genuinely failed before connecting. When the tool you are reading has a second
 output mode, ask which of your fixtures has ever spoken it.
-ELEVEN of the fifteen defects had a test that should have caught them and could not — defects
-3, 4, and 7 through 15 — and in every one of those eleven the vacuity was in the fixture, the
-harness, the inherited environment, the unrun mode, or the assertion's anchor, never the assertion's logic. The count is written
+TWELVE of the sixteen defects had a test that should have caught them and could not — defects
+3, 4, and 7 through 16 — and in every one of those twelve the vacuity was in the fixture, the
+harness, the inherited environment, the unrun mode, the unmodelled reader, or the assertion's anchor, never the assertion's logic. The count is written
 against the defect IDs because it was wrong in three places at once for a round: this line
 said SEVEN, the script header said SIX, and defect 12's own entry calls itself the eighth
-shape. A summary number with nothing anchoring it drifts the round after it is written. **The list is not converging on zero — seven of the
-fifteen were found after the other eight had been fixed and written up, the eleventh in the
-round that fixed the ninth and tenth, and each of the twelfth through fifteenth in the round
+shape. A summary number with nothing anchoring it drifts the round after it is written. **The list is not converging on zero — eight
+were found after the other eight had been fixed and written up, the eleventh in the
+round that fixed the ninth and tenth, and each of the twelfth through sixteenth in the round
 that fixed its predecessor, all of them in code those write-ups had
 just finished explaining. Treat the stated total as the number found so far.**
 
 **Rounds three and four of review on that file found nothing whatsoever except stale summary
 counts, and the remedy is now a test rather than a resolution.** The suite reads the header's
 numbered entries as the only source of truth for how many defects there are, then
-checks the prose against them: contiguous ordinals, the stated total (`Fifteen of them.`), the
+checks the prose against them: contiguous ordinals, the stated total (`Sixteen of them.`), the
 same-shape-plus-own-class split, and every `of the <number>` phrase naming a count of four or more. The
 floor of four is measured, not guessed — the header's only other such phrase is `of the two
 caps`, which is two rate limiters rather than two defects, and no rule short of parsing
 English separates them. Proved red four ways, one mutation per assertion, each on that case
 and no other. It does not parse WHICH defects the test-hole claim names (`defects 3, 4, and 7
-through 15`), because that is prose and a parser for it would break more often than the claim
+through 16`), because that is prose and a parser for it would break more often than the claim
 it guards — but a sixth check does pin where the range ENDS, since that part is a digit and is
 the same digit as the entry count. The reviewer found that range stale in two files in one
 round, the day after the fifteenth entry landed, with every other check green: leaving the

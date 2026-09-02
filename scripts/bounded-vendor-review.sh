@@ -104,15 +104,15 @@
 #   describes is how the next reader reproduces the bug.
 #
 # THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because
-# each is a way this file's own claims were false. Fifteen of them. Eleven are the same
+# each is a way this file's own claims were false. Sixteen of them. Eleven are the same
 # defect — AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE
-# ADVERTISED — and the other four are their own classes, listed anyway because
-# dropping them would make the pattern look tidier than it is. Not one of the fifteen
-# was found by the author reasoning about the code. ELEVEN of the fifteen had a test that
-# should have caught them and could not — defects 3, 4, and 7 through 15 — and in every
-# one of those eleven the vacuity was in the FIXTURE, THE HARNESS, THE INHERITED
-# ENVIRONMENT, THE UNRUN MODE, or THE ASSERTION'S ANCHOR rather than in the
-# assertion's logic.
+# ADVERTISED — and the other five are their own classes, listed anyway because
+# dropping them would make the pattern look tidier than it is. Not one of the sixteen
+# was found by the author reasoning about the code. TWELVE of the sixteen had a test that
+# should have caught them and could not — defects 3, 4, and 7 through 16 — and in every
+# one of those twelve the vacuity was in the FIXTURE, THE HARNESS, THE INHERITED
+# ENVIRONMENT, THE UNRUN MODE, THE UNMODELLED READER, or THE ASSERTION'S ANCHOR rather
+# than in the assertion's logic.
 #
 # The count is anchored to those defect IDs rather than asserted on its own, because it
 # has now been wrong in three different places at once: this line said SIX, all five
@@ -140,10 +140,11 @@
 # from a live claim, so a stale phrase being retired is described here rather than
 # quoted. Verbatim would be better history and would also be a permanent red.
 #
-# Seven of the fifteen (9 through 15) were found only AFTER the other eight were fixed
+# Eight of the sixteen (9 through 16) were found only AFTER the other eight were fixed
 # and written up, by reviewers reading the fixed file — 11 was found in the round that
 # fixed 9 and 10, 12 in the round that fixed 11, 13 in the round that fixed 12, 14 in
-# the round that fixed 13, and 15 in the round that fixed 14. The list is not
+# the round that fixed 13, 15 in the round that fixed 14, and 16 in the round that
+# fixed 15, in a display the round that fixed 14 had rewritten. The list is not
 # converging on zero, and pretending
 # otherwise in this header would be the same category of false claim as the defects
 # themselves.
@@ -296,8 +297,10 @@
 #      time, and listed anyway rather than dropped for spoiling the pattern — the
 #      convention above is that every defect found in this file stays in the header,
 #      and quietly omitting the one that does not fit the tidy sentence is its own
-#      version of the problem. The skills invoke this script with `--agent`, where
-#      the CLI's stdout is a machine-readable stream; the summary line and its four
+#      version of the problem. One documented chain invokes this script with
+#      `--agent` — see defect 15 for the measured scope, which this entry
+#      overstated as "the skills" until 2026-09-01 — and in that mode the CLI's
+#      stdout is a machine-readable stream; the summary line and its four
 #      continuation lines went to that same stream, so a consumer parsing the vendor
 #      leg read records the vendor never emitted. Every other message here was
 #      already on stderr, so this was inconsistency rather than design. Caught by the
@@ -487,8 +490,35 @@
 #      was switched off, and — the part that matters — a findings run exits 1, met
 #      branch 2's `!= connected`, and printed NO VENDOR REVIEW HAPPENED over a review
 #      that had completed and flagged something. Defect 4's outcome by a third route,
-#      in the false-refusal direction, and the wrapper is invoked with `--agent` in a
-#      command written out in both skills.
+#      in the false-refusal direction.
+#
+#      HOW OFTEN THAT MODE IS ACTUALLY USED, because the first write-up of this
+#      defect got it wrong and propagated the wrong version into five documents.
+#      It said "both skills call the wrapper with `--agent`, so on an old copy that
+#      is the ordinary path, not an edge case." Counted 2026-09-01 across the two
+#      repos: five documented invocations of this script exist and exactly ONE
+#      passes `--agent` — the agent-mode chain in `review-plan-v2/SKILL.md`. (That
+#      sentence is deliberately phrased around the count rather than with an
+#      `of the <number>` construction, because the header-arithmetic check reads any
+#      such phrase above three as a claim about the defect total and cannot parse
+#      English well enough to know better. Its own comment predicted that cost and
+#      chose it; today is the first time it was actually paid, and one reword is
+#      what it came to. Describing the retired phrasing rather than quoting it is
+#      the same constraint one layer on — a quotation is a red too.) The primary
+#      gate command in every skill omits it, because the operator reads that leg's
+#      output as prose. So the defect is real and its blast radius was overstated:
+#      a pre-fix exit 3 is explained by this defect only when the caller passed the
+#      flag. What is measured on the other side is that the CLI itself prints
+#      `Notice: Detected claude environment. Use 'coderabbit review --agent' ...`
+#      on every run inside an agent session, so the mode is recommended by the
+#      vendor to exactly the caller most likely to be running this wrapper — which
+#      is why "one of five" is a scope and not a dismissal.
+#
+#      Kept as a correction rather than a silent reword, on this file's own rule
+#      about design comments that outlive the design. The generalisable part: the
+#      claim was about the CALLERS, and every check in the suite is about this
+#      script, so nothing in the harness could have contradicted it. A frequency
+#      claim needs a count, and the count was one `grep` away for the whole round.
 #
 #      MEASURED, NOT INFERRED, because inferring what a stream carries is precisely
 #      how defect 4 happened. 2026-09-01 on 0.7.5, agent mode, 50s of a real run:
@@ -511,6 +541,37 @@
 #      against the buggy script because it speaks the mode the bug does not affect.
 #      `fake_agent_findings` and `fake_agent_hang` emit the NDJSON measured above and
 #      nothing else.
+#
+#  16. THE REFUSAL'S OWN DISPLAY ORDERED BY FILE, SO IT COULD NOT ANSWER THE
+#      QUESTION ITS MESSAGE ASKED. Its own class, and the shortest way to say why it
+#      is not defect 14 again: 14 was a wrong VERDICT, this was a correct verdict
+#      printed above a block the reader cannot use to check it. The refusal ran
+#      `cat "$out" "$err" | tr '\r' '\n' | tail -n 15` — `cat` orders by file, so a
+#      single stale connect-phase line in `$err` printed after every later-phase line
+#      in `$out`, and the display's last line was not the run's last line. Directly
+#      beneath it the message said "its last phase above was still the connect one",
+#      and both skills instruct the operator to overrule an exit 3 by reading this
+#      block. So the one reader with no way around it was handed the one arrangement
+#      that cannot settle the question, in the round after the same ordering was
+#      removed from the verdict two hundred lines up.
+#
+#      Fixed with two labelled sections in the verdict's own order — stdout, then
+#      stderr — rather than a merge with a sort, because there is no shared clock
+#      across two capture files and inventing an interleaving would be defect 4's
+#      mistake (asserting what a stream carries) relocated to the display layer.
+#      Discarding `$err` would also have "fixed" it and would lose a diagnostic the
+#      vendor chose to emit, which is defect 10's rule.
+#
+#      TWELFTH TEST HOLE, and it is A READER NO ASSERTION MODELLED. Every case in the
+#      suite asserts on the wrapper's MESSAGES — exit status, a sentence, which
+#      stream it went to — and the reviewer-output block is the one part of the
+#      output whose whole purpose is to be interpreted by a human rather than
+#      matched. Nothing was blind in the fixtures this time and nothing was merged in
+#      the harness: the block was simply outside what the suite considered output.
+#      The new case runs a fake whose stdout reaches a later phase while its stderr
+#      holds one connect-phase line, and asserts the LAST line of the stdout section
+#      names the later phase; against the concatenating version the sections do not
+#      exist and it is red on that case and no other.
 #
 # 120s for the connect is not a guess about how long connecting should take —
 # it is a claim that connecting does not take two minutes. NOT VERIFIED as a
@@ -666,10 +727,10 @@ command -v "$CR_BIN" >/dev/null 2>&1 || {
 out=$(mktemp) || { echo "STOP: cannot create a temp file; nothing was run." >&2; exit 2; }
 # TWO FILES, because the launch below used `2>&1` into one until 2026-09-01 and
 # `cat "$out"` then replayed the merged stream to our own stdout — defect 10. The
-# skills pass `--agent`, where the CLI's stdout is NDJSON, so any diagnostic the
-# reviewer wrote to stderr came back out as a record the vendor never emitted. That
-# is defect 7's rule ("stdout belongs to the reviewer") one layer in, and it is the
-# merged-streams vacuity from defect 7's own test harness appearing in the
+# agent-mode chain passes `--agent`, where the CLI's stdout is NDJSON, so any
+# diagnostic the reviewer wrote to stderr came back out as a record the vendor
+# never emitted. That is defect 7's rule ("stdout belongs to the reviewer") one
+# layer in, and it is the merged-streams vacuity from defect 7's own harness in the
 # PRODUCTION path: `2>&1` destroys the distinction the caller needs.
 err=$(mktemp) || { echo "STOP: cannot create a temp file; nothing was run." >&2; exit 2; }
 # Inline rather than a `cleanup()` function: shellcheck reports SC2329 on a
@@ -1015,19 +1076,35 @@ wait "$cr_pid" 2>/dev/null
 cr_status=$?
 
 if [ -n "$killed_reason" ]; then
-  echo "--- reviewer output before the kill -------------------------------" >&2
-  # BOTH captures, and `tr '\r' '\n'` before the tail. This was `tail -n 15 "$out"`
-  # until 2026-09-01, and on the runs that matter most — a wedged reviewer, whose
-  # entire output is in-place progress redraws — the whole capture is ONE line, so
-  # the tail showed one line while the message below told the operator to read "its
-  # last progress line above". `connect_verdict` had split the returns since defect 4
-  # and the human-facing display had not, which is the same signal made unreadable
-  # for the only reader who cannot work around it.
-  cat "$out" "$err" 2>/dev/null | tr '\r' '\n' | tail -n 15 >&2
+  # BOTH captures, LABELLED AND IN THE VERDICT'S OWN ORDER — defect 16. And
+  # `tr '\r' '\n'` before the tail, which was the fix for the first half of this:
+  # it was `tail -n 15 "$out"` until 2026-09-01, and on the runs that matter most
+  # — a wedged reviewer, whose entire output is in-place progress redraws — the
+  # whole capture is ONE line, so the tail showed one line while the message below
+  # told the operator to read "its last progress line above".
+  #
+  # The second half survived that round. `cat "$out" "$err"` orders BY FILE, which
+  # is exactly the bug defect 14 removed from `connect_verdict`: a single stale
+  # connect-phase line in `$err` printed after every later-phase line in `$out`, so
+  # the display's last line was not the run's last line. The verdict below is
+  # computed from the ordered read and the block above it was not, and both skills
+  # tell the operator to overrule this refusal by reading this block — so the one
+  # reader who cannot work around it was shown the one arrangement that cannot
+  # answer the question the message asks of it. Labelled sections rather than a
+  # merge with a sort: there is no shared clock across two files to sort by, and
+  # inventing an interleaving would be defect 4's mistake (asserting what a stream
+  # carries) in the display layer. Naming the streams lets the reader do what the
+  # verdict does — read stdout first, fall back to stderr — and keeps the vendor's
+  # own diagnostic, which discarding `$err` would lose.
+  echo "--- reviewer stdout before the kill (the verdict reads this first) -" >&2
+  tr '\r' '\n' <"$out" 2>/dev/null | tail -n 15 >&2
+  echo "--- reviewer stderr before the kill -------------------------------" >&2
+  tr '\r' '\n' <"$err" 2>/dev/null | tail -n 15 >&2
   echo "-------------------------------------------------------------------" >&2
   if [ "$killed_reason" = "connect" ]; then
     echo "STOP: the reviewer never got past its connect phase in ${CONNECT_CAP}s." >&2
-    echo "      Its last phase above was still the connect one ('$CONNECT_PHASE'" >&2
+    echo "      Its last phase in the stdout block above (or in stderr, if stdout" >&2
+    echo "      carried no phase line at all) was still the connect one ('$CONNECT_PHASE'" >&2
     echo "      in prose, '$CONNECT_PHASE_AGENT' under --agent), so it" >&2
     echo "      had not reached any later phase — the signature of the vendor being" >&2
     echo "      unreachable, not of a slow review. A slow review names the phase it" >&2
@@ -1064,8 +1141,8 @@ cat "$out"
 cat "$err" >&2
 # STDOUT BELONGS TO THE REVIEWER, NOT TO THIS SCRIPT. `cat "$out"` above is the
 # CLI's own output and belongs on stdout; every message this wrapper writes goes to
-# stderr, including this blank separator. The skills call this script with `--agent`,
-# and in that mode the CLI's stdout is a machine-readable stream — prose appended to
+# stderr, including this blank separator. One documented chain calls this script
+# with `--agent`, and in that mode the CLI's stdout is NDJSON — prose appended to
 # it is a record the vendor never emitted, read by a parser that cannot tell the
 # difference. Same shape as the rest of this file: our own output made to look like
 # the thing we are reporting on.

@@ -889,6 +889,57 @@ else
   failed=$((failed + 1)); printf 'FAIL %s -- %s\n' "$label" "$why"
 fi
 
+# --- DEFECT 16: THE REFUSAL'S OWN DISPLAY, WHICH NO ASSERTION MODELLED --------
+#
+# Defect 14 removed `cat "$out" "$err"` from the VERDICT and left it in the block the
+# refusal prints for the operator, directly above a sentence telling them to read
+# "its last phase above" — and both skills tell the operator to overrule an exit 3 by
+# reading that block. So the reader with no way around it got by-file ordering: one
+# stale connect-phase line in $err printed after every later-phase line in $out.
+#
+# The twelfth test hole, and the one shape not on the list yet: A READER NO ASSERTION
+# MODELLED. Nothing was wrong in a fixture and nothing was merged in the harness —
+# every case asserts on the wrapper's own MESSAGES (a status, a sentence, a stream),
+# and this block exists to be interpreted by a human, so it sat outside what the
+# suite treated as output. The fixture needed already existed: defect 14's, whose
+# stdout reaches `Writing review comments` while its stderr holds a connect line.
+#
+# The assertion is on ORDER WITHIN A SECTION, which `case_run`'s substring match
+# cannot express — under `cat` both lines are present and merely in the wrong order,
+# so every "output contains X" test is green. Against the concatenating version the
+# labelled sections do not exist at all and the first assertion reports that.
+n=$((passed + failed + 1))
+dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_slow_with_connect_line_on_stderr "$dir/bin"
+PATH="$dir/bin:$PATH" CR_LOG_DIR="$dir/logs" TOTAL_CAP=12 CONNECT_CAP=4 POLL=1 \
+  bash "$UNDER_TEST" --base main >"$dir/stdout" 2>"$dir/stderr"
+status=$?
+label="the refusal's display is sectioned, so its last phase is readable"
+why=""
+[ "$status" -eq 3 ] || why="exit $status, wanted 3"
+if [ -z "$why" ]; then
+  # `tr` because the fake writes progress as \r redraws, exactly as the CLI does.
+  stdout_section=$(tr '\r' '\n' <"$dir/stderr" |
+    awk '/^--- reviewer stdout before the kill/ { f = 1; next }
+         /^--- reviewer stderr before the kill/ { f = 0 }
+         f')
+  last_line=$(tail -n 1 <<<"$stdout_section")
+  if [ -z "$stdout_section" ]; then
+    why="the refusal has no labelled reviewer-stdout section, so the reader cannot tell which stream a phase line came from — this is the by-file \`cat\`"
+  elif ! grep -qF "Writing review comments" <<<"$last_line"; then
+    why="the stdout section's LAST line is not the run's last phase — got '$last_line'"
+  fi
+fi
+# And not fixed by discarding stderr, which satisfies everything above (defect 10).
+if [ -z "$why" ] && ! grep -qF "Connecting to CodeRabbit" "$dir/stderr"; then
+  why="the reviewer's stderr was dropped from the display entirely"
+fi
+if [ -z "$why" ]; then
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+else
+  failed=$((failed + 1)); printf 'FAIL %s -- %s\n' "$label" "$why"
+fi
+
 # --- DEFECT 6: "returned" is not "produced a verdict" -------------------------
 #
 # The reviewer-returned path exited 0 unconditionally, so a CLI that died on a
@@ -1310,7 +1361,7 @@ fi
 # this file has ever carried has been well above it.
 #
 # What it deliberately does not check is WHICH defects had a test hole — "defects 3,
-# 4, and 7 through 15" is a claim about ten specific entries and no parser settles it.
+# 4, and 7 through 16" is a claim about twelve specific entries and no parser settles it.
 # What check F below DOES pin is the range's upper end, because that part is not prose:
 # it is a digit, and it is the same digit as the entry count.
 #
