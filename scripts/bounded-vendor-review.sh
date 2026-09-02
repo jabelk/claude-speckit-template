@@ -826,6 +826,20 @@ new_logs() {
 # neither does, and adds no assumption to replace the one it removes. A limit that can be
 # closed without new evidence is a defect with a note on it. Raised by the PR-side review
 # on 2026-09-01, one round after the same reviewer's note produced the comment above.
+#
+# THE FALLBACK TO $err IS NOT A STALENESS HOLE, and the next round asked whether it was.
+# The fallback fires only when $out carries NO progress line at all, so a connect-phase
+# line in $err is not being preferred over later evidence — it is the only evidence in
+# existence, and `stuck` is the same verdict that line would produce arriving on stdout.
+# Dropping the fallback there would send that case to `unknown`, which switches the early
+# kill off for a run whose own output says it never connected: defect 3's shape, a bound
+# disabled by ordinary conditions. What the round DID find is that no fixture constructed
+# the state — the tenth shape of test blindness, two streams as competing sources of one
+# signal — so `connect line on stderr is the only evidence -> still stuck` now pins it.
+# Residual, stated rather than left implicit: a stderr diagnostic containing both `elapsed`
+# and the connect phrase lands on `stuck` when stdout has said nothing, which is the
+# refusal side. That is the safe direction here and the unsafe one when stdout HAS spoken,
+# which is exactly the asymmetry the ordering above encodes.
 _last_progress_line() {  # last `elapsed` line of one capture, empty if it has none
   [ -r "$1" ] || return 0
   tr '\r' '\n' <"$1" 2>/dev/null | grep -F 'elapsed' | tail -n 1

@@ -390,6 +390,32 @@ EOF
   chmod +x "$bin/coderabbit"
 }
 
+fake_hang_connect_line_on_stderr_only() {
+  local bin="$1"
+  mkdir -p "$bin"
+  cat >"$bin/coderabbit" <<'EOF'
+#!/usr/bin/env bash
+# The OTHER HALF of the fixture above, and it is the state the defect-14 fix raised a
+# question about one round later: a genuinely wedged reviewer whose only progress line
+# is on STDERR. stdout says nothing at all, so `_last_progress_line "$out"` is empty and
+# the verdict comes from $err — which is the fallback the reviewer asked whether stale
+# stderr could poison. It cannot, and this case is the statement of why: there is no
+# later evidence being outranked here, because there is no other evidence. The connect
+# line is the whole of what the CLI has said, and `stuck` is the same verdict it would
+# produce on stdout.
+#
+# What this pins is therefore the fallback ITSELF, not the ordering. Delete the `[ -n
+# "$last" ] || last=$(_last_progress_line "$err")` line and this case goes to `unknown`,
+# the early kill declines, and TOTAL_CAP arrives 900s later on a run whose own output
+# said it never connected — defect 3's shape, a bound switched off by conditions the
+# vendor chose. Read with the case above it, the pair fixes the ordering in both
+# directions: $err never beats a live $out, and $err still counts when $out is silent.
+printf 'Connecting to CodeRabbit... 1s elapsed\r' >&2
+sleep 600
+EOF
+  chmod +x "$bin/coderabbit"
+}
+
 fake_clean() {
   local bin="$1"
   mkdir -p "$bin"
@@ -626,6 +652,22 @@ case_run "connected but slow -> TOTAL_CAP, not the connect kill" \
 case_run "connect line on stderr must not outrank a later one on stdout" \
   3 "produced no verdict in 12s" "" fake_slow_with_connect_line_on_stderr \
   "never got past its connect phase"
+
+# The case above's mirror, and the reason both exist. The round after defect 14 asked
+# whether falling back to $err could classify STALE stderr as stuck; the answer is that
+# when stdout carries no progress line the $err line is not stale, it is the only thing
+# the CLI has said, and `stuck` is what it would mean on either stream. Nothing had
+# constructed that state — the tenth shape of blindness, two streams as competing
+# sources of one signal, which is defect 14's own hole from the opposite side. So the
+# fallback needs its own case or the fix to defect 14 could be "simplified" into
+# switching the early kill off for every reviewer that reports progress on stderr.
+#
+# The 11s bound is the load-bearing half here, not the exit code: without the fallback
+# this fixture still exits 3 with the wrong sentence at TOTAL_CAP. Seen red by deleting
+# the `|| last=$(_last_progress_line "$err")` line — `output lacked 'never got past its
+# connect phase'`, this case and no other.
+case_run "connect line on stderr is the only evidence -> still stuck" \
+  3 "never got past its connect phase" 11 fake_hang_connect_line_on_stderr_only
 
 # DEFECT 1, still stuck, still early-killed. Logs are out of the decision now, so
 # the time bound has stopped being about them; what is load-bearing here is the
@@ -1241,10 +1283,27 @@ hdr_num_of() {  # number word -> value on stdout, empty if it is not one
 # read with a loop rather than `mapfile`, which does not exist in the bash 3.2
 # that macOS ships as /bin/bash — the rest of this suite is 3.2-clean and one
 # builtin from 4.0 would make it exit 1 before reaching any assertion
+#
+# SCOPED TWO WAYS, because the first version scanned the whole file for any `# <n>.`
+# and would have absorbed a numbered list written anywhere in it — raised by the
+# PR-side review on 2026-09-01. The failure mode was loud rather than silent (an extra
+# ordinal breaks contiguity, or inflates N and makes B report a stale total), but the
+# message would have blamed the enumeration for a line somewhere else entirely, which
+# is defect 13's class: right status, false diagnosis. So: `awk` takes the comment
+# block that starts at the DEFECTS marker and ends at the first non-comment line, and
+# within it an entry must match the right-aligned `#  <n>. CAPS` form the entries use.
+# Both narrowings fail CLOSED — a mis-anchored scan yields too few ordinals and check A
+# says the enumeration did not read at all, which cannot be mistaken for a pass.
+#
+# Measured both ways on 2026-09-01 with `#  99. A NUMBERED COMMENT` inserted below the
+# block: the scoped scan yields `1..14` and the suite is green, the whole-file scan
+# yields `1..14 99` — a 15th ordinal that breaks contiguity and reports it against the
+# enumeration, which is the misdiagnosis this scoping exists to prevent.
 hdr_ordinals=()
 while read -r ord; do
   hdr_ordinals+=("$ord")
-done < <(grep -oE '^#[[:space:]]+[0-9]+\.' "$UNDER_TEST" | grep -oE '[0-9]+')
+done < <(awk '/THE DEFECTS FOUND BY USING IT/{b=1} b && !/^#/{exit} b' "$UNDER_TEST" |
+         grep -oE '^#[ ]{2,3}[0-9]{1,2}\. [A-Z]' | grep -oE '[0-9]+')
 n_defects=${#hdr_ordinals[@]}
 if [ "$n_defects" -lt 2 ]; then
   hdr_fail="parsed $n_defects numbered entries — the enumeration did not read at all"
