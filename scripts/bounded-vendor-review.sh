@@ -533,10 +533,29 @@ pid_is_live() {
 #
 # CLOSED WITH THE PRIMITIVE ALREADY HERE, not a new lock. `.resetting` is created under
 # `set -C` — so two concurrent resets cannot both proceed — and it is created BEFORE the
-# liveness scan, while the claim loop below refuses while it exists. That ordering is
-# the entire argument: a wrapper that got past the claim loop's check must have done so
-# before `.resetting` existed, so its slot file already exists when the scan runs, so
-# the scan sees it. A wrapper arriving after is turned away. There is no third case.
+# liveness scan, while the claim loop below refuses while it exists.
+#
+# THAT ORDERING IS HALF THE ARGUMENT, AND THIS COMMENT CLAIMED IT WAS THE WHOLE ONE.
+# What it said until 2026-09-02: a wrapper past the claim loop's check must have got there
+# before `.resetting` existed, "so its slot file already exists when the scan runs, so the
+# scan sees it… there is no third case." The middle step does not follow. PASSING THE CHECK
+# IS NOT THE SAME AS HAVING CLAIMED, and everything between them is a window: wrapper tests
+# `-e` and finds nothing, reset creates its marker, reset scans and sees no live slot,
+# wrapper claims, reset deletes a live claim, a third wrapper takes that name. Two reviews
+# under a cap of one, with no `force` and no stale marker anywhere — the third case, and it
+# was reachable for as long as the sentence denying it stood. (The takeover path's
+# `rm`-then-create gap below is a second, narrower route into the same window.) Raised by
+# the PR-side review 2026-09-02; it is the fourth time the mechanism added to close a gap
+# in this cap has contained one.
+#
+# The other half is now below the claim: CLAIM, THEN VERIFY. A wrapper re-reads the marker
+# AFTER its slot exists and releases the slot if a live reset has appeared, which makes the
+# two cases exhaustive at last. If the reset's scan missed the slot, the claim came after
+# the marker existed, so the wrapper's own re-read sees it and stands down; if the scan saw
+# the slot, a non-force reset refuses. `force` still deletes a live claim, deliberately and
+# with the refusal message saying so. Closing the force case as well needs a lock held
+# across the review, which is declined for the reason it has always been: it would
+# serialise concurrent gates for up to TOTAL_CAP, the hang this script exists to prevent.
 #
 # A reset that dies mid-way would otherwise wedge every future run, which is the failure
 # this branch is named after. So `.resetting` carries its owner's pid and is judged by
@@ -612,9 +631,22 @@ if [ -n "${ROUND_RESET-}" ]; then
   # for as long as either of them runs. A path delete is what breaks that; an ownership
   # delete cannot.
   trap round_gate_drop EXIT
+  # ARITHMETIC, NOT `seq 1 "$ROUND_CAP"`, AND THE DIFFERENCE IS A VERDICT. All three
+  # round-cap loops read it from an external command until 2026-09-02, and an unreachable
+  # `seq` makes `$(seq ...)` empty, which makes a `for` over it run ZERO times — measured,
+  # not reasoned: `PATH=/nonexistent; for i in $(seq 1 3); do n=$((n+1)); done` leaves n=0.
+  # So the claim loop below found no free slot and refused with exit 4, "this branch has
+  # already had ROUND_CAP reviews", on a branch that had had none; this scan found nothing
+  # live so a non-force reset never refused; and the delete below deleted nothing while
+  # printing "reset to 0" at exit 0. Three advertised outcomes, none of them the one that
+  # happened, from one missing binary — the same shape as the empty `cksum` hash one round
+  # earlier, and the reason this is a REMOVED DEPENDENCY rather than a fourth refusal:
+  # `ROUND_CAP` is already a validated positive integer above, so the shell can count to it
+  # with no command that can be missing. Raised by the PR-side review 2026-09-02.
   round_live=''
-  for round_n in $(seq 1 "$ROUND_CAP"); do
-    [ -e "$round_state/$round_n" ] || continue
+  round_n=1
+  while [ "$round_n" -le "$ROUND_CAP" ]; do
+    if [ ! -e "$round_state/$round_n" ]; then round_n=$((round_n + 1)); continue; fi
     round_held="$(cat "$round_state/$round_n" 2>/dev/null)" || round_held=''
     round_pid="${round_held#pid }"
     round_pid="${round_pid%% *}"
@@ -622,6 +654,7 @@ if [ -n "${ROUND_RESET-}" ]; then
       ''|*[!0-9]*) round_live="$round_live $round_n(unreadable)" ;;
       *) pid_is_live "$round_pid" && round_live="$round_live $round_n(pid $round_pid)" ;;
     esac
+    round_n=$((round_n + 1))
   done
   if [ -n "$round_live" ] && [ "$ROUND_RESET" != force ]; then
     echo "STOP: ROUND_RESET refused — a round is still held:$round_live" >&2
@@ -635,7 +668,11 @@ if [ -n "${ROUND_RESET-}" ]; then
   # Only the slot files. `key` stays, because it is the thing that makes a hash
   # collision readable and a reset is not a reason to lose it, and `.resetting` stays
   # until this process exits because it is what keeps the claim loop out.
-  for round_n in $(seq 1 "$ROUND_CAP"); do rm -f "$round_state/$round_n"; done
+  round_n=1
+  while [ "$round_n" -le "$ROUND_CAP" ]; do
+    rm -f "$round_state/$round_n"
+    round_n=$((round_n + 1))
+  done
   echo "note: ROUND_RESET set — round count for $round_branch reset to 0." >&2
   round_gate_drop
   trap - EXIT
@@ -703,12 +740,14 @@ fi
 round_claim=''
 round_count=0
 round_token="$$.$RANDOM.$RANDOM"
-for round_n in $(seq 1 "$ROUND_CAP"); do
+round_n=1
+while [ "$round_n" -le "$ROUND_CAP" ]; do
   if (set -C; printf 'pid %d token %s\n' "$$" "$round_token" >"$round_state/$round_n") 2>/dev/null; then
     round_claim="$round_state/$round_n"
     round_count="$round_n"
     break
   fi
+  round_n=$((round_n + 1))
 done
 
 # RELEASE IS AN OWNERSHIP TEST, NOT A PATH TEST. `rm -f "$round_claim"` deletes
@@ -870,6 +909,55 @@ trap 'on_signal HUP' HUP
 # directory must not abort the review; it just means the refusal cannot cite a
 # file.
 pre_logs=$(ls -1 "$LOG_DIR" 2>/dev/null || true)
+
+# CLAIM, THEN VERIFY — the second half of the `.resetting` ordering argued above, and
+# without it that argument had a hole rather than a residual. The check before the claim
+# asks "is a reset running?" and the answer expires the moment it is given; this asks the
+# same question with the slot already on disk, which is the only version of it a reset can
+# be held to. A live reset that appeared in between is one whose scan may have run before
+# this slot existed, so the honest move is to hand the round back rather than review under
+# a marker: exit 2, nothing counted, and the EXIT trap's ownership-checked release frees
+# the slot on the way out, so standing down costs the branch nothing.
+#
+# LAST THING BEFORE THE LAUNCH on purpose. Every line between the claim and here is a line
+# a reset can arrive in, and this is as late as the question can be asked while refusing is
+# still free — one instruction later a vendor round has been spent.
+if [ -e "$round_state/.resetting" ]; then
+  round_late="$(cat "$round_state/.resetting" 2>/dev/null)" || round_late=''
+  round_late_pid="${round_late#pid }"
+  round_late_pid="${round_late_pid%% *}"
+  case "$round_late_pid" in
+    ''|*[!0-9]*) round_late_pid='' ;;
+  esac
+  # Unreadable counts as live, as it does everywhere else here: a marker that cannot be
+  # parsed is a reset that cannot be ruled out, and over-refusing costs a re-run.
+  if [ -z "$round_late_pid" ] || pid_is_live "$round_late_pid"; then
+    echo "STOP: a ROUND_RESET appeared after round $round_count was claimed, so the" >&2
+    echo "      claim was handed back and NO VENDOR REVIEW HAPPENED. That reset may" >&2
+    echo "      have scanned for live rounds before this one existed, and reviewing" >&2
+    echo "      under it is how a live claim gets deleted underneath a running" >&2
+    echo "      review. The round was NOT spent — re-run in a moment." >&2
+    [ -n "$round_late_pid" ] && echo "      Holder: pid $round_late_pid" >&2
+    exit 2
+  fi
+fi
+# AND THE SLOT MUST STILL BE THIS RUN'S. A `ROUND_RESET=force` deletes live claims by
+# design, and a wrapper that reviews holding a deleted slot has left its name free for the
+# next arrival — the cap breach arriving from the far end, silently, because nothing else
+# would ever notice. Comparing the token rather than testing `-e` is what makes this the
+# ownership question and not the existence one: a slot recreated by somebody else is
+# somebody else's round.
+case "$(cat "$round_claim" 2>/dev/null)" in
+  *"token $round_token") : ;;
+  *)
+    echo "STOP: round $round_count was claimed and is no longer this run's — a" >&2
+    echo "      ROUND_RESET=force cleared it, or something else in $round_state" >&2
+    echo "      did. NO VENDOR REVIEW HAPPENED, because reviewing on a slot this" >&2
+    echo "      run no longer holds leaves that slot free for the next wrapper and" >&2
+    echo "      puts two reviews under one cap. Re-run in a moment." >&2
+    exit 2
+    ;;
+esac
 
 # `setsid` where available so the whole process group can be killed; the CLI
 # spawns children and a bare `kill` on the parent leaves them holding the socket.

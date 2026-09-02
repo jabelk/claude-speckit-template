@@ -157,6 +157,16 @@ jobs:
           # count this repo has had to retire. Re-derive when either script gains an
           # external command, or accept that this floor lags the thing it protects.
           #
+          # THREE INPUTS, NOT TWO, and the trigger sentence above named two of them
+          # until 2026-09-02 while the METHOD paragraph named three. The third is THIS
+          # `run:` BLOCK — everything after `export PATH="$shim"` executes through the
+          # farm as surely as the scripts do, which is why `wc` was the first name this
+          # floor was ever caught missing and why `find` is on the list at all. A
+          # trigger that omits the input its own defect came from is the
+          # half-enumeration this comment is about, written into the instruction for
+          # avoiding it. So: re-derive when either script gains an external command, OR
+          # when a line is added below the `export`.
+          #
           # Where each of the three runs, so the next reader can check rather than
           # trust: `cksum` builds the round-state directory name in
           # scripts/bounded-vendor-review.sh — an unreachable one used to leave the
@@ -181,7 +191,9 @@ jobs:
           # changing what fourteen cases mean. Raised by the PR-side review 2026-09-02.
           # It is the third round on one list, so read the METHOD paragraph above as
           # the standing instruction it is rather than as history: re-derive when
-          # either script gains an external command.
+          # either script gains an external command, or when this `run:` block gains
+          # a line below the `export` — all three are inputs, and the restatement
+          # here omitted the third one until 2026-09-02.
           for req in bash env git grep sleep mkdir cat awk head chmod date tr tail \
                      pgrep find mktemp sort seq sed rm cut ls dirname touch comm \
                      wc cksum ps id; do

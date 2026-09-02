@@ -37,17 +37,28 @@ section, where the operational rules it produced are.
 ## The defects
 
 THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because each is a way
-this file's own claims were false. Twenty-six of them. TWENTY are the same defect — AN
+this file's own claims were false. Twenty-eight of them. TWENTY-TWO are the same defect — AN
 ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE ADVERTISED — and the other
 six are their own classes, listed anyway because dropping them would make the pattern look
-tidier than it is. Not one of the twenty-six was found by the author reasoning about the
-code; the closest is defect 21, which a CI runner found by running a linter version this
-machine does not have. EIGHTEEN of the twenty-six had a test that should have caught them
-and could not — defects 3, 4, 7 through 16, 19 through 21, 23, 25 and 26 — and in every one of
-those eighteen the vacuity was in the FIXTURE, THE HARNESS, THE INHERITED ENVIRONMENT, THE
-UNRUN MODE, THE UNMODELLED READER, THE UNRUN LINTER VERSION, THE SHARED KNOB, THE UNENTERED
-WINDOW, or THE ASSERTION'S ANCHOR rather than in the assertion's logic. Defects 17, 18, 22 and
-24 are outside that eighteen for two plain reasons: for 17, 18 and 24 the block they lived in
+tidier than it is. TWENTY-SEVEN of the twenty-eight were not found by the author reasoning
+about the code; the closest of those is defect 21, which a CI runner found by running a linter
+version this machine does not have. **Defect 28 is the single exception, and a narrow one**:
+the vendor leg raised the `force` case, which was already documented and deliberate, and the
+general form — a breach with no `force` in it anywhere — came out of checking whether the
+reviewer's causal story was right. Reading the code because a reviewer pointed at it is not
+the same as reading it unprompted, which is why this sentence moves by one and not by more.
+
+TWENTY of the twenty-eight had a test that should have caught them and could not — defects 3,
+4, 7 through 16, 19 through 21, 23, 25, 26, 27 and 28 — and in nineteen of those twenty the
+vacuity was in the FIXTURE, THE HARNESS, THE INHERITED ENVIRONMENT, THE UNRUN MODE, THE
+UNMODELLED READER, THE UNRUN LINTER VERSION, THE SHARED KNOB, THE UNENTERED WINDOW, or THE
+ASSERTION'S ANCHOR rather than in the assertion's logic. **Defect 28 broke that claim, and its
+shape is worse**: its test was not blind, it was WRONG. A case observed the exact behaviour
+under review and asserted that behaviour was correct, because the fixture's expectation had
+been derived from the same unsound sentence as the code. Every other entry here is a test that
+could not see; this one saw and approved. Fixing the code without re-reading what the green
+cases were asserting would have left the suite green and the guard wrong. Defects 17, 18, 22
+and 24 are outside the twenty for two plain reasons: for 17, 18 and 24 the block they lived in
 was new, so there was no blind test — only no test; and 22 is a claim in four documents rather
 than a line of code, and the checks that had read this file's own prose were deleted the day it
 became a document.
@@ -973,3 +984,115 @@ than obeyed. Mutation-proved 2026-09-02: adding a bare `rm` back after the re-re
 else including the notes left intact, is red on that case ALONE — `deleted a live reset's marker
 planted after the last read` — and deleting the re-read instead is red on the case above it plus that
 same case's fixture guard, which reports `1 read(s) of the marker` rather than a false pass.
+
+### Defect 27 — ALL THREE ROUND-CAP LOOPS TOOK THEIR BOUND FROM A COMMAND THAT CAN BE MISSING
+
+Raised by the vendor leg 2026-09-02. `for round_n in $(seq 1 "$ROUND_CAP")` — the liveness scan, the
+reset's delete, and the claim itself. `ROUND_CAP` was already validated as a positive integer twenty
+lines above every one of them, so `seq` was adding nothing but a dependency, and an unreachable `seq`
+makes `$(seq …)` EMPTY, which makes the `for` run ZERO TIMES. Measured, not reasoned, because the
+zero-iteration outcome is the one people get wrong: `PATH=/nonexistent; for i in $(seq 1 3); do
+n=$((n+1)); done` leaves `n=0` — no error, no message, a loop body that simply never executes.
+
+TWENTY-FIRST instance of the shape, and it is the first that lands in BOTH directions at once, which
+is what makes it worth more than the one-character fix:
+
+- The claim loop claims nothing, so `round_count` stays 0 and the wrapper refuses with exit 4 —
+  "this branch has already had 3 vendor reviews" against a branch that has had none. A refusal is the
+  safe direction, but the message names a cause that is false, and an operator reading it raises
+  `ROUND_CAP` or runs `ROUND_RESET=1`, neither of which can help.
+- The reset's delete loop deletes nothing while the run goes on to print `round count for <branch>
+  reset to 0`. An advertised verdict that was not the one advertised, in one line.
+- The reset's liveness scan inspects no slots, so `round_live` is empty and the reset does not refuse
+  — a reset that clears a branch while another wrapper is mid-review, which is the exact breach the
+  scan was added in defect 24 to prevent. This is the cap-breaching direction and it arrives silently.
+
+Fixed by REMOVING THE DEPENDENCY rather than adding a fourth refusal: `round_n=1; while [ "$round_n"
+-le "$ROUND_CAP" ]` in all three places, which is arithmetic on a variable already validated and has
+no command in it to be missing. Same reasoning as `TOTAL_CAP` being the decision and `CONNECT_CAP`
+the early kill, and the same reasoning as preflight's decision being one `[ -n ]`: a test with no
+command in it cannot have a helper whose operational failure reads as "found nothing". The empty
+`cksum` hash one round earlier is the same shape one command over, and that one had to be a refusal
+because there is no way to compute a hash by arithmetic; here there was.
+
+**FIFTEENTH TEST HOLE, AND IT IS THE SHARED KNOB AGAIN.** Every case in the suite ran with a working
+`seq`, so no assertion could distinguish a bounded loop from an unbounded dependency — and worse, the
+template's CI floor asserts `seq` is REACHABLE through the restricted-PATH farm, which means the one
+place in the whole system that mentions `seq` was guaranteeing the condition that hid the defect. A
+knob every case shares is a knob no case tests. New case `an unusable seq does not fake an exhausted
+budget` puts a `seq` on PATH that prints to stderr and exits 127, then asserts the whole protocol
+still works through it: rounds 1-3 admitted, round 4 refused with exit 4 naming the real cause,
+`ROUND_RESET=1` accepted and reporting "reset to 0", the slots actually gone, and a round after the
+reset admitted. Mutation-proved 2026-09-02: reverting all three loops to the `seq` form is red on
+that case and that case alone, reporting `rounds 1-3 exited 4/4/4 — a broken seq refused a free
+budget`.
+
+**And the fixture for it was wrong twice in the same way, which is worth more than the case.** The
+"slots actually gone" assertion first read `$statedir/1` AFTER the following round had run — and that
+round re-claims slot 1, so the file was there whether or not the reset had deleted anything. Moving
+the read earlier did not fix it: `ROUND_RESET=1` clears the branch and then GOES ON TO REVIEW as
+round 1, so the reset run itself recreates slot 1 before it exits. The assertion is now slots 2 and
+3, which a working delete removes and nothing in the case puts back. **An observable that something
+else recreates is not an observable**, and it took two drafts to stop naming one.
+
+### Defect 28 — THE COMMENT ARGUING THE CAP COULD NOT BE BREACHED WAS ITSELF THE BREACH
+
+The vendor leg pointed at the claim-then-review ordering and said `ROUND_RESET=force` could delete a
+live claim, leaving that slot free for the next wrapper. True, documented, and DELIBERATE — that is
+what `force` means, and it is stated where `force` is offered. So the finding as written was already
+answered. Checking whether its causal story was right is what turned up the real one, and the real
+one needs no `force` and no stale marker anywhere in it.
+
+The claim path's invariant comment said the non-`force` breach was closed because a reset creates
+`.resetting` before it scans, and the claim path refuses while that marker exists. **That ordering is
+half the argument, and the comment presented it as the whole one.** Passing a check is not the same as
+having claimed, and everything between them is a window:
+
+1. Wrapper A tests `.resetting` — absent — and proceeds.
+2. A reset creates `.resetting` and scans the slots for live rounds. A's slot DOES NOT EXIST YET, so
+   the scan sees nothing live and does not refuse.
+3. The reset deletes every slot and exits.
+4. A creates its slot — `set -C` succeeds, because the name is free — and reviews.
+5. Wrapper B arrives, finds slot 1 free, claims it, and reviews.
+
+Two reviews under a cap of one. No `force`, no stale marker, nothing an operator did wrong. TWENTY-
+SECOND instance of the shape, and the FOURTH time the mechanism added to close a gap in this cap has
+contained one — 24 fixed 23's takeover, 25 fixed 24's delete, 26 fixed 25's re-read, and this fixes
+the sentence 26 left standing.
+
+**CLAIM, THEN VERIFY.** The pre-claim check stays, because refusing early is free; what changes is
+that its verdict is no longer trusted to still hold. Once the slot exists the marker is re-read, and
+a marker owned by a live pid (or unparseable, which counts as live everywhere else here) means a reset
+may already have scanned past this slot — so the round is HANDED BACK: exit 2, no review, and the EXIT
+trap's ownership-checked release frees the slot on the way out, so standing down costs the branch
+nothing. A second check, immediately before the launch, compares the slot's TOKEN rather than testing
+`-e`, which is the ownership question instead of the existence one: a slot recreated by somebody else
+is somebody else's round, and reviewing while holding a deleted slot leaves that name free for the
+next arrival — the same breach arriving from the far end. Both sit as late as they can while refusing
+is still free; one instruction later a vendor round has been spent.
+
+What is NOT closed: `ROUND_RESET=force` can still delete a live claim between the last check and the
+launch. Closing that needs the lock held across the review, which is declined for the reason it has
+always been declined — it would serialise concurrent gates for up to `TOTAL_CAP`, which is the hang
+this script exists to prevent. The residual belongs to `force`, is documented where `force` is
+offered, and the token check above means the wrapper at least NOTICES on the way past.
+
+**SIXTEENTH TEST HOLE, AND IT IS THE ONLY ONE IN THIS FILE THAT WAS NOT BLINDNESS.** Defect 26's new
+case plants a live reset's marker after the claim path's last read of it and asserted the run should
+PROCEED — exit 0, review goes ahead — on the reasoning that "a claim made under a stale marker is the
+same thing as a claim made a moment earlier, and the reset's own live-slot refusal is there to catch
+it." That is the unsound sentence, verbatim, in a fixture. The case was watching the defect happen
+and grading it correct. Every other test hole here could not see what it was testing; this one saw it
+exactly and approved it, which is why fixing the code was only half the round — the green case had to
+be re-derived, not re-run. Its marker half is unchanged (nothing must be deleted); its verdict half is
+now exit 2 with the round handed back, and its `reads` guard is 3 rather than 2 so that deleting the
+post-claim re-read fails it as a FIXTURE failure instead of quietly passing. A second new case, `a
+slot that stopped being this run's is not reviewed on`, plants another owner's content in the claimed
+slot and asserts exit 2, no review, and that the release left the intruder's file alone.
+
+Mutation-proved 2026-09-02, four ways, each red on exactly its own case with no collateral:
+neutering the post-claim marker re-read reports `2 read(s) of the marker — the post-claim re-read
+never happened`; short-circuiting the token comparison reports `exit 0 — reviewed on a slot it no
+longer held`; making the release delete by path instead of by token reports `released a slot it did
+not own` on the new case and `deleted a slot it no longer owned` on 25's; and the `seq` revert above
+stays confined to 27's case.

@@ -1822,9 +1822,17 @@ fi
 # delete breaks that invariant; an ownership delete cannot.
 #
 # Entered deterministically rather than raced, by shimming the one command the reset runs
-# between its create and its drop: `seq`, on the slot scan. The shim plants a marker owned
-# by this suite — LIVE, so the claim loop below must refuse rather than tidy it away as
-# stale, which is the observable that separates the two implementations.
+# between its create and its drop: `cat`, reading the warmup run's slot file during the
+# liveness scan. The shim plants a marker owned by this suite — LIVE, so the claim loop
+# below must refuse rather than tidy it away as stale, which is the observable that
+# separates the two implementations.
+#
+# THE HOOK USED TO BE `seq`, and it stopped existing on 2026-09-02 when the round-cap loops
+# gave up that dependency (an unreachable `seq` made all three of them run zero times and
+# refuse, delete nothing, or scan nothing while reporting otherwise). Worth a line because a
+# fixture whose hook silently stops firing is a case that silently stops testing: the
+# `.armed` assertion below is what turns that into a red rather than a pass, and it is the
+# reason this case survived the change with its subject intact.
 n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_clean "$dir/bin"
 out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); status=$?
@@ -1835,18 +1843,27 @@ if [ "$status" -ne 0 ] || [ -z "$statedir" ]; then
   printf 'FAIL %-56s %s\n' "$label" "a clean run left no state dir (fixture)"
 else
   : >"$statedir/.resetting.armed"
-  cat >"$dir/bin/seq" <<'EOF'
+  cat >"$dir/bin/cat" <<'EOF'
 #!/bin/sh
-# Fires once, on the reset's slot scan. `seq` is emulated rather than exec'd because this
-# directory is first on PATH, so resolving the real one from here would find this file.
-if [ -n "${HARNESS_GATE:-}" ] && [ -f "$HARNESS_GATE.armed" ]; then
-  rm -f "$HARNESS_GATE.armed"
-  printf 'pid %d token intruder\n' "$HARNESS_PID" >"$HARNESS_GATE"
-fi
-i=$1
-while [ "$i" -le "$2" ]; do echo "$i"; i=$((i + 1)); done
+# Fires once, on the reset's read of a slot file during its liveness scan — which is after
+# the marker was created and before it is dropped. Only slot reads arm it: the marker itself
+# and the key file go through here too, and firing on those would plant before the create.
+last=''
+for a in "$@"; do last="$a"; done
+case "$last" in
+  */[0-9])
+    if [ -n "${HARNESS_GATE:-}" ] && [ -f "$HARNESS_GATE.armed" ]; then
+      rm -f "$HARNESS_GATE.armed"
+      printf 'pid %d token intruder\n' "$HARNESS_PID" >"$HARNESS_GATE"
+    fi
+    ;;
+esac
+for real in /bin/cat /usr/bin/cat; do
+  [ -x "$real" ] && exec "$real" "$@"
+done
+exit 1
 EOF
-  chmod +x "$dir/bin/seq"
+  chmod +x "$dir/bin/cat"
   out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3 ROUND_RESET=1 \
     HARNESS_GATE="$statedir/.resetting" HARNESS_PID=$$); status=$?
   if [ -f "$statedir/.resetting.armed" ]; then
@@ -1939,19 +1956,30 @@ fi
 # — by path or guarded by content, it makes no difference here, since the content the guard
 # compares is the content that was there when it read — the wrapper unlinks a LIVE reset's
 # marker and the claim loop is then open to every other wrapper for as long as that reset
-# scans. Under no delete there is nothing left to be wrong: the intruder's marker stands, and
-# this claim proceeds, which is the same thing as a claim made a moment earlier and is what
-# the reset's own live-slot refusal is there to catch.
+# scans. So the marker must survive, and that half of the assertion is unchanged.
 #
-# So the assertion is the marker, not the exit. Deterministic by shimming the read itself:
-# `cat` is external, the claim path reads the marker exactly twice, and the shim passes the
-# first through and replaces the file immediately after serving the SECOND — which is the
-# re-read — so the wrapper is past every look it will ever take when the file changes.
+# WHAT CHANGED ON 2026-09-02 IS THE VERDICT, AND THIS CASE ASSERTED THE WRONG ONE. It
+# required exit 0 with the review going ahead, on the reasoning that "a claim made under a
+# stale marker is the same thing as a claim made a moment earlier, and the reset's own
+# live-slot refusal is there to catch it." That reasoning is the unsound half of the
+# ordering argument in the wrapper: the reset's refusal catches a claim only if the scan
+# SEES the slot, and a claim made after the scan is invisible to it. The live reset planted
+# here is one that may already have scanned, so the round has to be handed back — which is
+# what the post-claim re-read does, and this case is now the deterministic test of it.
+# Both halves matter and neither implies the other: the marker survives (nothing was
+# deleted) AND the slot does not (nothing was held), at exit 2 with no review.
+#
+# Deterministic by shimming the read itself: `cat` is external, and the shim passes the
+# first read through and replaces the file immediately after serving the SECOND — the
+# pre-claim re-read — so the wrapper is past every look the OLD code would ever take when
+# the file changes hands. The third read is the new one, and `reads` below is asserted at 3
+# rather than 2 so that deleting the post-claim check goes red here as a fixture failure
+# rather than quietly passing.
 n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
 fake_clean "$dir/bin"
 out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); status=$?
 statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
-label="a marker replaced after the final read survives the claim"
+label="a live reset appearing after the claim hands the round back"
 if [ "$status" -ne 0 ] || [ -z "$statedir" ]; then
   failed=$((failed + 1))
   printf 'FAIL %-56s %s\n' "$label" "a clean run left no state dir (fixture)"
@@ -1984,9 +2012,9 @@ EOF
   out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3 \
     HARNESS_COUNT="$dir/reads" HARNESS_PID=$$); status=$?
   reads=0; [ -f "$dir/reads" ] && reads="$(cat "$dir/reads")"
-  if [ "$reads" -lt 2 ]; then
+  if [ "$reads" -lt 3 ]; then
     failed=$((failed + 1))
-    printf 'FAIL %-56s %s\n' "$label" "$reads read(s) of the marker — the re-read never happened (fixture)"
+    printf 'FAIL %-56s %s\n' "$label" "$reads read(s) of the marker — the post-claim re-read never happened"
     awk '{ print "       | " $0 }' <<<"$out" | head -5
   elif [ ! -e "$statedir/.resetting" ]; then
     failed=$((failed + 1))
@@ -1994,13 +2022,140 @@ EOF
   elif ! grep -qF 'token intruder' "$statedir/.resetting"; then
     failed=$((failed + 1))
     printf 'FAIL %-56s %s\n' "$label" "the marker survived but its owner did not"
-  elif [ "$status" -ne 0 ] || ! grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+  elif [ "$status" -ne 2 ] || ! grep -qF "appeared after round" <<<"$out"; then
     failed=$((failed + 1))
-    printf 'FAIL %-56s %s\n' "$label" "exit $status — a stale marker must be ignored, not obeyed"
+    printf 'FAIL %-56s %s\n' "$label" "exit $status — reviewed under a reset that may have already scanned"
     awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "said it handed the round back and reviewed anyway"
+  # The warmup kept slot 1, so this run claims 2. Handing the round back means releasing
+  # it: a slot left behind here would refuse a later round for a review that never ran.
+  elif [ -e "$statedir/2" ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "kept the round it said it handed back"
   else
     passed=$((passed + 1)); printf 'ok   %s\n' "$label"
   fi
+fi
+
+# AND THE SLOT MUST STILL BE THIS RUN'S AT THE LAUNCH. The case above is the marker half of
+# claim-then-verify; this is the ownership half. A `ROUND_RESET=force` deletes live claims by
+# design, and a wrapper that reviews holding a deleted slot has left its own name free for
+# the next arrival — two reviews under one cap, arriving from the far end and visible to
+# nobody, because every party behaved exactly as documented.
+#
+# Deterministic by shimming the one external command that runs between the claim and the
+# check: `ls`, on the pre-launch log snapshot. The shim overwrites the slot with somebody
+# else's token, which is what a force reset plus a later wrapper leaves behind. The second
+# assertion is the one that stops the fix being worse than the bug: the release must not
+# delete that foreign slot, because doing so would free a LIVE round.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); status=$?
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+label="a slot that stopped being this run's is not reviewed on"
+if [ "$status" -ne 0 ] || [ -z "$statedir" ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "a clean run left no state dir (fixture)"
+else
+  : >"$dir/armed"
+  cat >"$dir/bin/ls" <<'EOF'
+#!/bin/sh
+# Fires once, on the wrapper's pre-launch log snapshot — after the claim and before the
+# ownership check. `ls` runs exactly twice in the wrapper and the second is past the review,
+# so one arming file is enough to place this write in the window under test.
+if [ -n "${HARNESS_ARMED:-}" ] && [ -f "$HARNESS_ARMED" ]; then
+  rm -f "$HARNESS_ARMED"
+  printf 'pid 1 token someone-else\n' >"$HARNESS_SLOT"
+fi
+for real in /bin/ls /usr/bin/ls; do
+  [ -x "$real" ] && exec "$real" "$@"
+done
+exit 1
+EOF
+  chmod +x "$dir/bin/ls"
+  out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3 \
+    HARNESS_ARMED="$dir/armed" HARNESS_SLOT="$statedir/2"); status=$?
+  if [ -f "$dir/armed" ]; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "the ls shim never fired, so the slot never changed hands (fixture)"
+  elif [ "$status" -ne 2 ] || ! grep -qF "no longer this run's" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "exit $status — reviewed on a slot it no longer held"
+    awk '{ print "       | " $0 }' <<<"$out" | head -5
+  elif grep -qF "reviewing 3 of 3 changed file(s)" <<<"$out"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "said the slot was not its own and reviewed anyway"
+  elif [ ! -e "$statedir/2" ] || ! grep -qF 'token someone-else' "$statedir/2"; then
+    failed=$((failed + 1))
+    printf 'FAIL %-56s %s\n' "$label" "released a slot it did not own"
+  else
+    passed=$((passed + 1)); printf 'ok   %s\n' "$label"
+  fi
+fi
+
+# THE ROUND-CAP LOOPS MUST NOT DEPEND ON A COMMAND THAT CAN BE MISSING. All three counted
+# with `seq 1 "$ROUND_CAP"` until 2026-09-02, and an unreachable `seq` makes that expansion
+# empty, so every one of those loops ran ZERO times: the claim found no free slot and refused
+# with exit 4 on a branch that had had none, the reset's scan saw nothing live, and its delete
+# deleted nothing while printing "reset to 0" at exit 0. Three advertised outcomes, none of
+# them the one that happened, from one missing binary.
+#
+# `seq` cannot be taken off PATH here — CI's farm links it and a laptop has it — so it is
+# shimmed with one that FAILS, which is the same input as far as `$(...)` is concerned and is
+# also the honest model of a `seq` that exists and is broken. The assertion is the whole
+# budget rather than one run, because the old bug's signature was a correct-looking refusal:
+# three rounds admitted, the fourth refused at exit 4 for the RIGHT reason, and a reset that
+# genuinely clears. Under the old code run 1 exits 4 and this case is red four ways.
+n=$((passed + failed + 1)); dir="$TMP/case-$n"; mkdir -p "$dir/bin" "$dir/logs"
+fake_clean "$dir/bin"
+cat >"$dir/bin/seq" <<'EOF'
+#!/bin/sh
+echo "seq: unusable in this fixture" >&2
+exit 127
+EOF
+chmod +x "$dir/bin/seq"
+label="an unusable seq does not fake an exhausted budget"
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); s1=$?
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); s2=$?
+out=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); s3=$?
+out4=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); s4=$?
+statedir="$(find "$dir/rounds" -name '*.rounds' -type d 2>/dev/null | head -n 1)"
+outr=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3 ROUND_RESET=1); sr=$?
+# SLOTS 2 AND 3, NOT SLOT 1, AND NOT AFTER THE NEXT RUN. Two drafts of this assertion were
+# wrong in the same way — they named an observable that something else recreates, so the case
+# could not distinguish a reset that deleted three files from one that deleted none. First it
+# read `$statedir/1` after the following round had already re-claimed it; then it read slot 1
+# right after the reset, which the RESET RUN ITSELF claims, because `ROUND_RESET=1` clears the
+# branch and then goes on to review as round 1. The two slots that a working delete removes
+# and nothing here puts back are the only honest evidence.
+cleared=yes
+if [ -n "$statedir" ]; then
+  { [ -e "$statedir/2" ] || [ -e "$statedir/3" ]; } && cleared=no
+fi
+out5=$(round_run "$dir/rounds" "$dir/bin" "$dir/logs" ROUND_CAP=3); s5=$?
+if [ "$s1" -ne 0 ] || [ "$s2" -ne 0 ] || [ "$s3" -ne 0 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "rounds 1-3 exited $s1/$s2/$s3 — a broken seq refused a free budget"
+  awk '{ print "       | " $0 }' <<<"$out" | head -5
+elif [ "$s4" -ne 4 ] || ! grep -qF "already had 3 vendor reviews" <<<"$out4"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "round 4 exited $s4 — the cap did not fire, or not as the cap"
+  awk '{ print "       | " $0 }' <<<"$out4" | head -5
+elif [ "$sr" -ne 0 ] || ! grep -qF "reset to 0" <<<"$outr"; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "the reset exited $sr"
+  awk '{ print "       | " $0 }' <<<"$outr" | head -5
+elif [ "$cleared" != yes ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "the reset said it cleared the slots and deleted none"
+elif [ "$s5" -ne 0 ]; then
+  failed=$((failed + 1))
+  printf 'FAIL %-56s %s\n' "$label" "the round after the reset exited $s5"
+  awk '{ print "       | " $0 }' <<<"$out5" | head -5
+else
+  passed=$((passed + 1)); printf 'ok   %s\n' "$label"
 fi
 
 # A STRAY FILE IN THE STATE DIRECTORY CANNOT SWITCH THE CAP OFF. This case replaced
