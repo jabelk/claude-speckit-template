@@ -52,65 +52,71 @@
 # at the same time. That sighting is NOT VERIFIED. This case is.
 #
 # SEEN RED, each mutation failing in a different place. Each line carries the
-# case count the run was measured against, because the suite has grown three
-# times and a count quoted as current when it is not is the same defect the block
-# at the bottom of this file is about:
+# FAILURE count and the date it was measured, and NO suite total — not the pass
+# count, and not the suite size the run was measured against. Both of those go
+# stale on the next added case, and both were sitting right here, in this list,
+# on the day the check at the bottom of this file was written to ban them: it
+# scanned this file's comments and could not see them, because they were written
+# with an uppercase verdict word and an `(of N, date)` tail that its pattern
+# matched neither of. The PR-side review found that on 2026-09-01, one round
+# after the check landed. An earlier version of this block date-stamped the
+# stale counts instead of removing them, which is the same defect with an alibi
+# on it: a reader still reads a number, and the date only tells them it was true
+# once:
 #
-#   restore the log-reading detector     -> 20 passed, 1 FAILED (of 21,
-#     (`git show HEAD~:...`)                2026-09-01) — the healthy-but-slow
-#                                           case, refused with "never got past
-#                                           its connect phase". That red run IS
-#                                           the fourth defect stated out loud
-#   replace `tr '\r' '\n'` with `cat`    -> 20 passed, 1 FAILED (of 21,
-#     in the connect detector               2026-09-01) — the same case. The CLI
-#                                           redraws progress in place, so without
-#                                           the split "the last progress line" is
-#                                           the whole stream and means nothing
-#   `${VAR:-default}` back on the caps   -> 16 passed, 5 FAILED (of 21,
-#                                           2026-09-01) — one per variable whose
-#                                           empty value silently took a default
-#   the whole pre-verdict-gate script    -> 22 passed, 7 FAILED (of 29,
-#     (`git show HEAD:...`, defect 6)       2026-09-01) — the three verdict-gate
-#                                           cases and the four empty-git-variable
-#                                           cases. Every OTHER case stayed green,
-#                                           which is how the reworked fakes were
-#                                           shown not to have moved the old ground
-#   make the 128+ branch unreachable     -> 28 passed, 1 FAILED (of 29,
-#                                           2026-09-01) — the signal case alone,
-#                                           which is the point of it being a
-#                                           separate branch: it holds when the
-#                                           output parse does not
-#   make the failed-before-reviewing     -> 27 passed, 2 FAILED (of 29,
-#     branch `if false`                     2026-09-01) — both non-review cases,
-#                                           and NEITHER findings case, so the two
-#                                           halves are independent
-#   drop the phase test from that        -> 27 passed, 2 FAILED (of 29,
-#     branch, i.e. adopt the CLI's         2026-09-01) — both FINDINGS cases, the
-#     status after all                     opposite pair. The gate is pinned from
-#                                           both sides: too narrow loses the
-#                                           non-review, too broad loses the review
-#   revert `fake_found_issues` to its    -> 27 passed, 2 FAILED (of 29,
-#     pre-2026-09-01 phaseless form        2026-09-01) — both findings cases, on a
-#     (a FIXTURE mutation, not a           CORRECT script. That is the shape of a
-#     script one)                          vacuous double caught from the other
-#                                           direction: the fake made right code
-#                                           look wrong, and one written the other
-#                                           way round makes wrong code look right
-#   delete the early connect kill        -> the connect case AND the two-log
-#                                           case fail (2 of 17, 2026-08-31)
-#   make a kill `exit 0` instead of 3    -> all four hang cases fail (4 of 14,
-#                                           2026-08-31)
-#   adopt the CLI's exit status as ours  -> both findings cases fail (2 of 14,
-#                                           2026-08-31)
-#   the whole pre-fix script             -> the two-log case and the orphan case
-#                                           fail (2 of 17, 2026-08-31), which is
+#   restore the log-reading detector     -> 1 FAILED (2026-09-01) — the
+#     (`git show HEAD~:...`)                healthy-but-slow case, and no other,
+#                                           refused with "never got past its
+#                                           connect phase". That red run IS the
+#                                           fourth defect stated out loud
+#   replace `tr '\r' '\n'` with `cat`    -> 1 FAILED (2026-09-01) — the same
+#     in the connect detector               case. The CLI redraws progress in
+#                                           place, so without the split "the
+#                                           last progress line" is the whole
+#                                           stream and means nothing
+#   `${VAR:-default}` back on the caps   -> 5 FAILED (2026-09-01) — one per
+#                                           variable whose empty value silently
+#                                           took a default
+#   the whole pre-verdict-gate script    -> 7 FAILED (2026-09-01) — the three
+#     (`git show HEAD:...`, defect 6)       verdict-gate cases and the four
+#                                           empty-git-variable cases. Every
+#                                           OTHER case stayed green, which is how
+#                                           the reworked fakes were shown not to
+#                                           have moved the old ground
+#   make the 128+ branch unreachable     -> 1 FAILED (2026-09-01) — the signal
+#                                           case alone, which is the point of it
+#                                           being a separate branch: it holds
+#                                           when the output parse does not
+#   make the failed-before-reviewing     -> 2 FAILED (2026-09-01) — both
+#     branch `if false`                     non-review cases, and NEITHER
+#                                           findings case, so the two halves are
+#                                           independent
+#   drop the phase test from that        -> 2 FAILED (2026-09-01) — both
+#     branch, i.e. adopt the CLI's          FINDINGS cases, the opposite pair.
+#     status after all                      The gate is pinned from both sides:
+#                                           too narrow loses the non-review, too
+#                                           broad loses the review
+#   revert `fake_found_issues` to its    -> 2 FAILED (2026-09-01) — both findings
+#     pre-2026-09-01 phaseless form         cases, on a CORRECT script. That is
+#     (a FIXTURE mutation, not a            the shape of a vacuous double caught
+#     script one)                           from the other direction: the fake
+#                                           made right code look wrong, and one
+#                                           written the other way round makes
+#                                           wrong code look right
+#   delete the early connect kill        -> 2 FAILED (2026-08-31) — the connect
+#                                           case and the two-log case
+#   make a kill `exit 0` instead of 3    -> 4 FAILED (2026-08-31) — all four hang
+#                                           cases
+#   adopt the CLI's exit status as ours  -> 2 FAILED (2026-08-31) — both findings
+#                                           cases
+#   the whole pre-fix script             -> 2 FAILED (2026-08-31) — the two-log
+#                                           case and the orphan case, which is
 #                                           how both defects were confirmed
 #                                           rather than argued
-#   remove the INT/TERM/HUP traps        -> the orphan case fails (1 of 17,
-#                                           2026-08-31), reporting both
-#                                           surviving pids
-#   kill the pid but not its descendants -> the orphan case fails (1 of 17,
-#                                           2026-08-31), reporting exactly ONE
+#   remove the INT/TERM/HUP traps        -> 1 FAILED (2026-08-31) — the orphan
+#                                           case, reporting both surviving pids
+#   kill the pid but not its descendants -> 1 FAILED (2026-08-31) — the orphan
+#                                           case, reporting exactly ONE
 #                                           surviving pid
 #
 # The last pair is worth reading together. Removing the traps orphans two
@@ -153,11 +159,12 @@
 # stating rather than quietly leaving an `11` for a reader to trust. `11` was every
 # launch the suite made that day: nine `case_run` fixtures plus the orphan case
 # plus the CONNECT_CAP-above-TOTAL_CAP case (the refusal cases never launch a CLI —
-# they exit at the guard, or name an absent `CR_BIN`). The suite has since gained
-# five `case_run` cases and three more hand-rolled launches, so it makes 20: fourteen
-# `case_run` fixtures, two stream-separation launches, three orphan/signal launches,
-# and the CONNECT_CAP-above-TOTAL_CAP case. The nine added after 2026-08-31 were never
-# put in front of the shim.
+# they exit at the guard, or name an absent `CR_BIN`). The suite has gained
+# `case_run` cases and hand-rolled launches since, so the current figure is larger
+# and is deliberately not written here: it is the `case_run` fixtures, plus the
+# stream-separation launches, plus the orphan and signal launches, plus the
+# CONNECT_CAP-above-TOTAL_CAP case, and it is derived below. Everything added after
+# 2026-08-31 was never put in front of the shim.
 #
 # THIS NUMBER HAS NOW BEEN WRONG TWICE IN TWO DAYS, which is the argument for deriving
 # it rather than reading it. Count the `case_run` calls with
@@ -1363,7 +1370,7 @@ fi
 # (E) no ABSOLUTE SUITE TOTAL in the header, or in this file's own comments
 #
 # A through D guard the DEFECT count. The header's OTHER kind of number went unguarded
-# until the PR-side review on 2026-09-02 found three of them stale in a single round —
+# until the PR-side review on 2026-09-01 found three of them stale in a single round —
 # three mutation results, each written as a true measurement of "N passed, one failed",
 # each falsified by the next case somebody added, none of them able to say so. That is
 # precisely the defect the four checks above exist for, sitting in the number nobody
@@ -1375,21 +1382,37 @@ fi
 # claimed, and "both non-review cases, neither findings case" is a mutation matrix. The
 # passed count was only ever the arithmetic complement of the suite size at one instant.
 #
-# Both shapes are refused, and the compact one is the load-bearing half: the same claim
-# written in four characters is the form the sibling documents used, so banning only the
-# spelled-out form would be a half-enumerated ban — defect 8's shape.
+# THREE shapes are refused, and the first version of this check saw only one of them.
+# It matched a lowercase "N passed, M failed" and the compact "N/M", scored green, and
+# was reported as proven — while the SEEN RED list at the top of THIS FILE carried a
+# dozen totals in a third shape it could not see: a pass count, then the verdict word
+# in CAPITALS, then a parenthesised "of" with the suite size and a date after it.
+# `grep -oE` is case-sensitive, and no branch of that alternation described the second
+# half at all. The shape has to be described here rather than shown, for the reason the
+# last paragraph of this comment gives.
+# So the needle was absent from the text under test, which is defect 13's anchor
+# vacuity in the check written to ban defect 13's cousin — found by the PR-side review
+# one round after this check landed, in the file the check says it scans. `-i` and an
+# `of N[,)]` branch are the fix, and the dozen entries were restated as failure counts
+# so the ban has something to hold. Banning fewer shapes than exist is a
+# half-enumerated ban, which is defect 8's shape, and this is the second time in two
+# rounds that the half-enumeration was the defect.
 #
 # IT SCANS THIS FILE'S COMMENTS TOO, which is the one place the other four checks
 # deliberately do not look: a mutation result belongs beside the case it was measured
-# on, so this file is where the next stale total will be written, and three of the four
-# found this round were in a comment rather than in the header. The stated cost is the
-# flattened-header cost one file over — a comment cannot QUOTE a retired total to
-# describe it, only describe it, which is why the paragraph above says "N passed, one
-# failed" in words. A false red costs one reword; a stale total costs a reader
-# believing a number.
+# on, so this file is where the next stale total will be written — three of the four
+# found in the round that added this check were in a comment rather than in the header,
+# and every one of the dozen the check itself missed was in this file. The stated cost
+# is the flattened-header cost one file over: a comment cannot QUOTE a retired total in
+# order to describe it, only describe it, which is why every mention of one in this
+# comment is spelled out in words. That cost is not theoretical — the first draft of
+# this comment quoted three retired totals, and the second quoted the very shape the
+# fix had just been written to catch. A false red costs one reword; a stale total costs
+# a reader believing a number.
 if [ -z "$hdr_fail" ]; then
   hdr_tot=$(grep -h '^#' "$UNDER_TEST" "$0" |
-            grep -oE '[0-9]{1,2} passed, [0-9]{1,2} failed|[0-9]{1,2}/[0-9]{1,2}' | head -1)
+            grep -oiE '[0-9]{1,2} passed, [0-9]{1,2} failed|of [0-9]{1,2}[,)]|[0-9]{1,2}/[0-9]{1,2}' |
+            head -1)
   [ -n "$hdr_tot" ] &&
     hdr_fail="an absolute suite total (\"$hdr_tot\") is stated in a comment — it goes stale on the next added case; state the failure count instead"
 fi

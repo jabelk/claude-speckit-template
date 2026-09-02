@@ -38,7 +38,7 @@ jobs:
           # an actionable finding there blocks the vendor leg behind it.
           #
           # This comment credited guard-suites.yml with making actionlint part of CI
-          # until 2026-09-02, when the PR-side review checked and it was false: that
+          # until 2026-09-01, when the PR-side review checked and it was false: that
           # workflow runs the two guard suites and shellcheck, and NO workflow in this
           # repo runs actionlint or markdownlint. Corrected rather than made true by
           # adding the CI steps, deliberately — the local leg already gates every push,
