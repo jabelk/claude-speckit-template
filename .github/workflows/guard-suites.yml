@@ -1,0 +1,196 @@
+name: guard suites
+# The two pre-push vendor guards carry test suites; this runs them, because a suite
+# that nothing runs is a suite that rots in every repo bootstrapped from this template.
+#
+# Linux on purpose, and not only for cost. `bounded-vendor-review.sh` prefers `setsid`
+# to put the reviewer in its own process group and falls back to a `pgrep -P` tree walk
+# where there is none. macOS has no `setsid`, so every developer run takes the fallback
+# and this job is the ONLY place the primary branch is exercised.
+on:
+  pull_request:
+  push:
+    branches: [main]
+# The hang fixtures `sleep 600` for real, so a superseded run holds a runner for up to
+# the job bound below doing work nobody will read. Cancel the previous run per ref.
+#
+# `cancel-in-progress` is scoped to pull requests rather than set to a bare `true`: on a
+# push to main, cancelling the previous run leaves whatever commit it was verifying with
+# no completed guard run at all, and "the guards passed" then means "a later push
+# cancelled the check". A suite whose whole subject is bounds that quietly stop existing
+# should not adopt one. Superseded PR pushes are where the waste actually is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  guards:
+    runs-on: ubuntu-24.04
+    # The hang fixtures `sleep 600` on purpose, and a lost cap is the exact failure
+    # this suite exists to detect — so without a job bound, the regression it is
+    # built to catch would run toward the 6-hour default instead of failing. A suite
+    # that proves bounds needs one of its own. 15 minutes against a suite that
+    # finishes in about one.
+    timeout-minutes: 15
+    steps:
+      # `persist-credentials: false`: both suites build throwaway git repositories
+      # and run fake binaries off a temporary PATH, and neither needs a remote. The
+      # default writes the job token into .git/config, where the fixtures' own git
+      # commands would be running beside it for the rest of the job.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Separate steps, and each one gets `if: ${{ !cancelled() }}`. A step with no
+      # `if:` carries an implicit `success()`, so an earlier red step would SKIP the
+      # ones below it — and a skipped guard suite renders as a grey tick rather than
+      # an X, which is the failure class both of these scripts exist to remove:
+      # a check whose absence is indistinguishable from its success. `!cancelled()`
+      # rather than `always()`, because a cancelled run should stop rather than keep
+      # sleeping through fixtures that genuinely `sleep 600`.
+      - name: Run the preflight-vendor-review guard suite
+        if: ${{ !cancelled() }}
+        run: bash scripts/test-preflight-vendor-review.sh
+
+      - name: Run the bounded-vendor-review guard suite
+        if: ${{ !cancelled() }}
+        run: bash scripts/test-bounded-vendor-review.sh
+
+      # This file's own header says Linux is the ONLY place the `setsid` branch is
+      # exercised. True, and it left the OTHER branch running nowhere — which is the
+      # gap this step closes. Added 2026-09-01, raised by the PR-side review.
+      # On ubuntu-24.04 every case takes `setsid`, so the FALLBACK — the one every
+      # macOS run takes, and the one defects 2 and 8 both lived in — was exercised on
+      # a laptop by hand and by nothing else. Those two are the orphan pair: a kill
+      # that reached the child and left the grandchildren holding the vendor socket.
+      # Without `setsid` the CLI is not a process-group leader, so `kill -- -$pid`
+      # fails and the enumerated `pgrep -P` tree walk is the ENTIRE kill mechanism
+      # rather than a backstop. Its suite has to run somewhere that is true.
+      #
+      # ABSENCE CANNOT BE SHIMMED BY PRECEDENCE. The branch predicate is
+      # `command -v setsid`, so a fake `setsid` earlier on PATH leaves it TRUE and this
+      # step would silently repeat the branch above while reporting the one below — the
+      # failure class both guards exist to remove. The only way in is a PATH with no
+      # setsid anywhere on it, hence the symlink farm; the `command -v` check after it
+      # is the load-bearing half, because a farm that quietly kept setsid would report
+      # a pass for a path it never entered. Proven both ways on 2026-09-01 with a fake
+      # setsid ahead of PATH: with the exclusion, exit 0; with the exclusion neutered,
+      # the refusal fires and the step is red.
+      #
+      # Linked by EXECUTABILITY, not by name, because that is what PATH resolution
+      # does. Measured the first time this ran: a 644 `~/.local/bin/env` (a uv
+      # artifact, not a binary) sat earlier on PATH than /usr/bin/env, the farm linked
+      # the name, and 14 cases exited 126. Failing loudly is the safe direction, but
+      # it fails for a reason with nothing to do with setsid.
+      - name: Run the bounded-vendor-review guard suite with no setsid (the macOS path)
+        if: ${{ !cancelled() }}
+        run: |
+          shim="$RUNNER_TEMP/no-setsid-bin"
+          rm -rf "$shim"; mkdir -p "$shim"
+          printf '%s\n' "$PATH" | tr ':' '\n' | while read -r d; do
+            [ -n "$d" ] || continue
+            [ -d "$d" ] || continue
+            for f in "$d"/*; do
+              { [ -f "$f" ] && [ -x "$f" ]; } || continue
+              b=${f##*/}
+              if [ "$b" = setsid ]; then continue; fi
+              [ -e "$shim/$b" ] || ln -s "$f" "$shim/$b" 2>/dev/null || true
+            done
+          done
+          export PATH="$shim"
+          if command -v setsid >/dev/null 2>&1; then
+            echo "SHIM FAILED: setsid still reachable at $(command -v setsid)" >&2
+            echo "this step would repeat the setsid branch and report it as the fallback" >&2
+            exit 1
+          fi
+          # A PARTIALLY BUILT FARM WAS INDISTINGUISHABLE FROM A BUILT ONE, which is
+          # this repo's recurring defect in a `run:` block. `ln -s ... || true`
+          # discards every link failure, and the only post-condition above is that
+          # setsid is ABSENT — a farm missing most of its contents satisfies that
+          # perfectly, and the suite then fails 14 cases for reasons unrelated to
+          # setsid. Not hypothetical: the 644-`env` measurement recorded above is
+          # exactly that outcome arriving by a different route, and it cost a round
+          # to diagnose because the failure named the wrong subject. Raised by the
+          # PR-side review 2026-09-01.
+          #
+          # The names are DERIVED, not guessed — and the list was HALF-ENUMERATED
+          # anyway until 2026-09-01, which is this repo's other recurring defect
+          # arriving inside the sentence claiming immunity to it. `wc` was missing,
+          # and the very next line of this block runs `wc -l` through the farm, so
+          # a broken `wc` link would have failed the step with a message about
+          # setsid. Derivation was clearly done over the two scripts and not over
+          # the run block that hosts them.
+          #
+          # Re-derived by extracting COMMAND-POSITION tokens (start of line, or
+          # after `|` `&&` `;` `(` `$(`) from the wrapper, its suite, AND the part
+          # of this block that executes after `export PATH="$shim"`, then keeping
+          # those whose `type -t` is `file`. Stripping comments first is part of the
+          # method rather than tidiness: a plain word-frequency pass over the same
+          # three files returns `say`, `who`, `tidy` and `tree`, because English
+          # prose is full of words that are also binaries on a mac. Two names the
+          # pass surfaces are deliberately NOT here — `ln` runs while the farm is
+          # being built, before the `export`, and `shellcheck` belongs to a later
+          # step with the normal PATH. Adding either would be a floor asserting a
+          # dependency the step does not have.
+          #
+          # `[ -x ]` ON THE RESOLVED PATH, NOT A BARE `command -v`, and the first
+          # version of this check got that wrong in the one direction that mattered.
+          # It claimed `command -v` "declines a link to a non-executable file, so
+          # this also covers the 644 mode directly" — the 644-`env` measurement two
+          # comments up, which is the only real incident this floor exists for. That
+          # claim was asserted rather than measured, and it is false. Measured
+          # 2026-09-01 against a farm link pointing at a 644 file: bare `command -v`
+          # says ACCEPT under /bin/bash (3.2.57) and /bin/dash, and decline under
+          # /bin/sh and /bin/zsh. So the answer depends on which shell the runner
+          # ships, and a floor whose verdict moves with the interpreter is not one.
+          # `[ -x "$p" ]` declines under all four, because it asks the kernel the
+          # question PATH execution will ask. Same file, same lesson as everything
+          # else in these two scripts: the confident inference was the wrong one.
+          for req in bash env grep sleep mkdir cat awk head chmod date tr tail \
+                     pgrep find mktemp sort seq sed rm cut ls dirname touch comm \
+                     wc; do
+            p=$(command -v "$req" 2>/dev/null) || p=
+            if [ -n "$p" ] && [ -x "$p" ]; then continue; fi
+            echo "SHIM FAILED: '$req' is not reachable-and-executable through the" >&2
+            echo "farm, so this step would fail the suite for a reason with nothing" >&2
+            echo "to do with setsid" >&2
+            exit 1
+          done
+          # `find`, not `ls | wc -l`, because SC2012 — the LOCAL pre-push gate runs
+          # actionlint, which runs shellcheck over every `run:` block here, so this
+          # line is linted like a script before it can be pushed. NOT by CI: no
+          # workflow in this repo runs actionlint, and this comment claimed
+          # otherwise until 2026-09-01, when the PR-side review checked. The same
+          # false claim, in the same round, sat in check-speckit-update.yml — see
+          # the note there, which also records why the fix is to correct the
+          # sentence rather than to add the CI step.
+          # (Do not start either sentence with the linter's own name: a comment
+          # whose first word is that name parses as a DIRECTIVE, which is
+          # SC1072/SC1073 and how this step was red a moment ago.)
+          echo "no setsid on PATH; $(find "$shim" -maxdepth 1 -type l | wc -l) links"
+          bash scripts/test-bounded-vendor-review.sh
+
+      # Both scripts are copies kept byte-identical with the source of truth in the
+      # workflows repo. Nothing here can verify that (the other repo is private and
+      # not checked out), so this only catches a shell error introduced locally.
+      - name: shellcheck the guards and their suites
+        if: ${{ !cancelled() }}
+        run: |
+          # The runner image already ships shellcheck. Install only if it does not,
+          # so the ordinary path has no network dependency and an apt mirror having a
+          # bad day cannot fail a step that had everything it needed.
+          # An `if`, not `command -v ... || apt-get update && apt-get install`:
+          # `A || B && C` parses as `(A || B) && C`, so that form installs on EVERY
+          # run, including the one where the binary was already there.
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq shellcheck
+          fi
+          # Print the version. On 2026-09-01 this job went red on SC2317 across the
+          # whole `on_signal` body while local shellcheck 0.11.0 said nothing about
+          # it, and the log gave no way to tell which version had the opinion.
+          shellcheck --version
+          shellcheck scripts/preflight-vendor-review.sh \
+                     scripts/test-preflight-vendor-review.sh \
+                     scripts/bounded-vendor-review.sh \
+                     scripts/test-bounded-vendor-review.sh

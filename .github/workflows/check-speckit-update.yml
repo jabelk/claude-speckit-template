@@ -32,9 +32,22 @@ jobs:
           # Truncate to 3000 chars to fit in issue body
           BODY="${BODY:0:3000}"
           EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-          echo "body<<$EOF" >> "$GITHUB_OUTPUT"
-          echo "$BODY" >> "$GITHUB_OUTPUT"
-          echo "$EOF" >> "$GITHUB_OUTPUT"
+          # One redirect, not three (SC2129). Pre-existing since #1; fixed here only
+          # because the LOCAL pre-push gate lints this file — review-plan-v2
+          # --static-only runs actionlint and shellcheck — and that leg is chained, so
+          # an actionable finding there blocks the vendor leg behind it.
+          #
+          # This comment credited guard-suites.yml with making actionlint part of CI
+          # until 2026-09-01, when the PR-side review checked and it was false: that
+          # workflow runs the two guard suites and shellcheck, and NO workflow in this
+          # repo runs actionlint or markdownlint. Corrected rather than made true by
+          # adding the CI steps, deliberately — the local leg already gates every push,
+          # and new CI jobs are not what a guard-script promotion branch is for.
+          {
+            echo "body<<$EOF"
+            echo "$BODY"
+            echo "$EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Compare versions
         id: compare
