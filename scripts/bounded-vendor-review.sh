@@ -104,14 +104,15 @@
 #   describes is how the next reader reproduces the bug.
 #
 # THE DEFECTS FOUND BY USING IT, all fixed here, all kept in the header because
-# each is a way this file's own claims were false. Fourteen of them. Ten are the same
+# each is a way this file's own claims were false. Fifteen of them. Eleven are the same
 # defect — AN ADVERTISED BOUND, OR AN ADVERTISED VERDICT, THAT WAS NOT THE ONE
 # ADVERTISED — and the other four are their own classes, listed anyway because
-# dropping them would make the pattern look tidier than it is. Not one of the fourteen
-# was found by the author reasoning about the code. TEN of the fourteen had a test that
-# should have caught them and could not — defects 3, 4, and 7 through 14 — and in every
-# one of those ten the vacuity was in the FIXTURE, THE HARNESS, THE INHERITED
-# ENVIRONMENT, or THE ASSERTION'S ANCHOR rather than in the assertion's logic.
+# dropping them would make the pattern look tidier than it is. Not one of the fifteen
+# was found by the author reasoning about the code. ELEVEN of the fifteen had a test that
+# should have caught them and could not — defects 3, 4, and 7 through 15 — and in every
+# one of those eleven the vacuity was in the FIXTURE, THE HARNESS, THE INHERITED
+# ENVIRONMENT, THE UNRUN MODE, or THE ASSERTION'S ANCHOR rather than in the
+# assertion's logic.
 #
 # The count is anchored to those defect IDs rather than asserted on its own, because it
 # has now been wrong in three different places at once: this line said SIX, all five
@@ -139,10 +140,11 @@
 # from a live claim, so a stale phrase being retired is described here rather than
 # quoted. Verbatim would be better history and would also be a permanent red.
 #
-# Six of the fourteen (9 through 14) were found only AFTER the other eight were fixed
+# Seven of the fifteen (9 through 15) were found only AFTER the other eight were fixed
 # and written up, by reviewers reading the fixed file — 11 was found in the round that
-# fixed 9 and 10, 12 in the round that fixed 11, 13 in the round that fixed 12, and 14
-# in the round that fixed 13. The list is not converging on zero, and pretending
+# fixed 9 and 10, 12 in the round that fixed 11, 13 in the round that fixed 12, 14 in
+# the round that fixed 13, and 15 in the round that fixed 14. The list is not
+# converging on zero, and pretending
 # otherwise in this header would be the same category of false claim as the defects
 # themselves.
 #
@@ -477,6 +479,39 @@
 #      moved, and it is red against the merged read with `never got past its connect
 #      phase` — the outage sentence printed over a working review.
 #
+#  15. THE DETECTOR READ THE PROSE STREAM ONLY, SO IT REFUSED EVERY FINDINGS RUN IN
+#      THE `--agent` MODE THE SKILLS DOCUMENT. `_last_progress_line` greped for the
+#      literal `elapsed`, which the CLI emits in its human progress redraws. Under
+#      `--agent` there is no prose stream at all: stdout is NDJSON and carries no
+#      `elapsed` anywhere. So `connect_verdict` was permanently `unknown`, CONNECT_CAP
+#      was switched off, and — the part that matters — a findings run exits 1, met
+#      branch 2's `!= connected`, and printed NO VENDOR REVIEW HAPPENED over a review
+#      that had completed and flagged something. Defect 4's outcome by a third route,
+#      in the false-refusal direction, and the wrapper is invoked with `--agent` in a
+#      command written out in both skills.
+#
+#      MEASURED, NOT INFERRED, because inferring what a stream carries is precisely
+#      how defect 4 happened. 2026-09-01 on 0.7.5, agent mode, 50s of a real run:
+#      stdout held `{"type":"review_context",...}` then `{"type":"status","phase":
+#      "connecting",...}`, `"phase":"setup"`, `"phase":"analyzing"`; zero lines
+#      matching `elapsed`; and stderr was EMPTY — 0 bytes, which also means the
+#      $out-then-$err fallback of defect 14 has nothing to fall back to in this mode.
+#
+#      The fix reads BOTH shapes and does not sniff the flag. Mode detection by
+#      argument parsing would be a fourth thing to keep in sync with the vendor, and
+#      it is unnecessary: the CLI names its own phase in both modes, more explicitly
+#      in NDJSON than in prose. `grep -E 'elapsed|"phase":'` takes the last line of
+#      either shape, and `stuck` now tests the connect phase in both vocabularies. A
+#      mode emitting neither still lands on `unknown`, which is where it was.
+#
+#      ELEVENTH TEST HOLE, and it is A MODE NO FIXTURE RAN — the closest sibling to
+#      defect 12's inherited environment, in that the harness never chose it. Every
+#      fake in the suite emits prose progress lines, including `fake_found_issues`,
+#      whose entire job is the findings path this defect breaks; that case is green
+#      against the buggy script because it speaks the mode the bug does not affect.
+#      `fake_agent_findings` and `fake_agent_hang` emit the NDJSON measured above and
+#      nothing else.
+#
 # 120s for the connect is not a guess about how long connecting should take —
 # it is a claim that connecting does not take two minutes. NOT VERIFIED as a
 # normal duration, and stated as a limit rather than glossed: the logs of the 17
@@ -595,6 +630,14 @@ done
 # log-file marker on 2026-09-01, because the log is silent during a healthy review
 # and therefore could not distinguish one from a hang — see connect_verdict().
 CONNECT_PHASE='Connecting to CodeRabbit'
+# The same phase in the OTHER output shape. `--agent` replaces the whole prose
+# progress stream with NDJSON and emits NO `elapsed` line at all, which was defect
+# 15 — see the header. Measured 2026-09-01 on 0.7.5: agent-mode stdout carries
+# `{"type":"status","phase":"connecting","status":"connecting_to_review_service"}`
+# and then `"phase":"setup"` / `"phase":"analyzing"`, and stderr is EMPTY. So the
+# CLI still names its own phase in that mode, more explicitly than in prose; the
+# detector reads both shapes and needs no flag-sniffing to tell which one it is in.
+CONNECT_PHASE_AGENT='"phase":"connecting"'
 
 for pair in "TOTAL_CAP:$TOTAL_CAP" "CONNECT_CAP:$CONNECT_CAP" "POLL:$POLL"; do
   name="${pair%%:*}" val="${pair#*:}"
@@ -840,9 +883,15 @@ new_logs() {
 # and the connect phrase lands on `stuck` when stdout has said nothing, which is the
 # refusal side. That is the safe direction here and the unsafe one when stdout HAS spoken,
 # which is exactly the asymmetry the ordering above encodes.
-_last_progress_line() {  # last `elapsed` line of one capture, empty if it has none
+# Last phase-naming line of one capture, empty if it has none. TWO shapes, because
+# the CLI has two output modes and the skills document both: a prose progress line
+# carrying `elapsed`, and an `--agent` NDJSON status record carrying `"phase":`.
+# Matching either is what makes this mode-agnostic — no flag parsing, so a caller
+# that reaches agent mode by any route (`--agent`, a future env var, a config file)
+# is read correctly, and a mode that emits neither shape still lands on `unknown`.
+_last_progress_line() {
   [ -r "$1" ] || return 0
-  tr '\r' '\n' <"$1" 2>/dev/null | grep -F 'elapsed' | tail -n 1
+  tr '\r' '\n' <"$1" 2>/dev/null | grep -E 'elapsed|"phase":' | tail -n 1
 }
 
 connect_verdict() {
@@ -852,7 +901,8 @@ connect_verdict() {
   [ -n "$last" ] || last=$(_last_progress_line "$err")
   if [ -z "$last" ]; then
     printf 'unknown\n'
-  elif [ "${last#*"$CONNECT_PHASE"}" != "$last" ]; then
+  elif [ "${last#*"$CONNECT_PHASE"}" != "$last" ] ||
+       [ "${last#*"$CONNECT_PHASE_AGENT"}" != "$last" ]; then
     printf 'stuck\n'
   else
     printf 'connected\n'
@@ -977,7 +1027,8 @@ if [ -n "$killed_reason" ]; then
   echo "-------------------------------------------------------------------" >&2
   if [ "$killed_reason" = "connect" ]; then
     echo "STOP: the reviewer never got past its connect phase in ${CONNECT_CAP}s." >&2
-    echo "      Its last progress line above still said '$CONNECT_PHASE', so it" >&2
+    echo "      Its last phase above was still the connect one ('$CONNECT_PHASE'" >&2
+    echo "      in prose, '$CONNECT_PHASE_AGENT' under --agent), so it" >&2
     echo "      had not reached any later phase — the signature of the vendor being" >&2
     echo "      unreachable, not of a slow review. A slow review names the phase it" >&2
     echo "      is slow in. The CLI has no timeout of its own and would have waited" >&2
@@ -1048,10 +1099,13 @@ if [ "$cr_status" -ge 128 ]; then
   exit 3
 fi
 
-# Branch 2: a non-zero status with no evidence it ever got past connecting. `elapsed`
-# progress lines are emitted from the first phase onward, so a run that reached ANY
-# later phase names it — and one that names none, and then failed, failed before
-# reviewing. `connect_verdict` is reused here rather than reimplemented; its
+# Branch 2: a non-zero status with no evidence it ever got past connecting. The CLI
+# names its phase from the first one onward — as an `elapsed` progress line in prose
+# mode and as a `"phase":` NDJSON record under `--agent` — so a run that reached ANY
+# later phase names it, and one that names none, and then failed, failed before
+# reviewing. Reading only the prose shape was defect 15, and it made this branch fire
+# on every findings run in the agent invocation the skills document.
+# `connect_verdict` is reused here rather than reimplemented; its
 # `unknown` (nothing parseable) and `stuck` (still connecting) both land on this
 # side, which is the safe direction. LIMIT, stated rather than glossed: a CLI that
 # reaches a later phase and THEN fails still reads as a verdict here. Whether it has
@@ -1059,7 +1113,8 @@ fi
 # exists, a findings run, and it exits 1 with a full phase sequence.
 if [ "$cr_status" -ne 0 ] && [ "$reviewer_phase" != "connected" ]; then
   echo "STOP: the reviewer exited ${cr_status} without ever reaching a review phase, after ${SECONDS}s." >&2
-  echo "      Its output above shows no progress line past '$CONNECT_PHASE', so it" >&2
+  echo "      Its output above names no phase past the connect one ('$CONNECT_PHASE'" >&2
+  echo "      in prose, '$CONNECT_PHASE_AGENT' under --agent), so it" >&2
   echo "      failed before reviewing rather than reviewing and finding something." >&2
   echo "      The CLI spends exit 1 on an unknown flag and on 'not a git repository'" >&2
   echo "      as well as on findings, so the status alone cannot tell those apart —" >&2

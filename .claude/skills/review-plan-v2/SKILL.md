@@ -145,8 +145,8 @@ at all, and the bare-name form scores green with zero failures; the tightened fo
 matching `environment: $v` after the colon, is red on nine, one per assertion. Nine
 assertions that read as coverage for four rounds and were decoration. The anchor
 matters as much as the needle — grep for the *sentence* the check produces, not for a
-token that also appears in its advice. Suite is 29 cases at that round; the four new empty-value
-cases are red against the previous script, and no other case is.
+token that also appears in its advice. The suite reached 29 cases at that round; the four
+new empty-value cases are red against the previous script, and no other case is.
 
 **`scripts/bounded-vendor-review.sh` is the second committed guard on this leg, and it
 exists because the CLI can hang forever.** On 2026-08-31 `coderabbit review` stopped
@@ -182,10 +182,10 @@ total, and no figure is repeated here because that figure has gone stale twice �
 with fakes that genuinely `sleep 600`, since a fake that never hangs removes the
 only behaviour worth guarding.
 
-**Fourteen defects have been found in that wrapper. Ten are every one of them an
+**Fifteen defects have been found in that wrapper. Eleven are every one of them an
 advertised bound — or an advertised verdict — that was not the one advertised; the other
 four are their own classes and are listed anyway, because a tidier pattern would be a
-false one. Not one of the fourteen was found by reasoning about the code.** They are worth listing because they are the shape this leg
+false one. Not one of the fifteen was found by reasoning about the code.** They are worth listing because they are the shape this leg
 fails in. (1) The connect kill required *exactly one* new log file, so a second gate
 running concurrently switched it off and the 120s bound silently became the 900s one.
 (2) The wrapper trapped no signals, so killing the wrapper left `coderabbit review`
@@ -274,7 +274,21 @@ the ordering and filed it as a stated limit pending a measurement of which strea
 progress lines — and no measurement was ever needed: `$out` first with `$err` only as a
 fallback is correct whichever stream carries them, and still degrades to `unknown` when
 neither does. **A limit that can be closed with no new evidence was never a limit; it was a
-defect with a note on it, and the note made it read as considered.**
+defect with a note on it, and the note made it read as considered.** (15) **The detector
+read the prose stream only, so it refused every findings run in the `--agent` mode these
+skills document.** `_last_progress_line` greped for the literal `elapsed`, and under
+`--agent` the CLI replaces the whole progress stream with NDJSON containing no `elapsed`
+line anywhere — so `connect_verdict` was permanently `unknown`, `CONNECT_CAP` was switched
+off (the safe direction), and branch 2 of the verdict gate fired on **every** findings run,
+printing `NO VENDOR REVIEW HAPPENED` at exit 3 over a completed review. Defect 4's outcome
+by a third route, in defect 9's false-refusal direction, and the mode is not hypothetical:
+it is the invocation written down in this file. Measured 2026-09-01 on 0.7.5 rather than
+inferred — 50s of a real agent-mode run gave 570 bytes of stdout with **zero** `elapsed`
+lines, carrying `"phase":"connecting"` then `"phase":"setup"` then `"phase":"analyzing"`,
+and an **empty** stderr, which also leaves defect 14's `$err` fallback with nothing to fall
+back to here. The detector now matches either shape and sniffs no flag, because the CLI
+names its own phase in both, more explicitly in NDJSON; a mode emitting neither still lands
+on `unknown`, which is where it already was.
 
 Two things from that history generalise past this wrapper. **An exit 3 dated before
 2026-09-01 may have been a false refusal** — defect 4 killed healthy reviews at
@@ -319,9 +333,14 @@ in a suite shares a knob, ask what interval that setting makes invisible.
 Defect 12 is the eighth angle and plainer still: **an environment the harness inherited and
 therefore never chose.** `HOME` is set in every shell anyone runs a suite from, so the
 *absence* of the variable was not a state any fixture had reason to construct — `env -u
-HOME` is the entire case, and it is red at exit 1 against the old form (`34 passed, 1
-failed`). When a script expands a variable it did not set, ask what happens when it is not
+HOME` is the entire case, and it is red at exit 1 against the old form, on that case and no
+other. When a script expands a variable it did not set, ask what happens when it is not
 there, because your own shell will never tell you.
+(That parenthesis used to carry an absolute pass-and-fail total. It is the LAST one, and it
+survived the round that removed every other because that sweep was line-wise and this one
+wrapped across two — the flattened-header lesson three paragraphs down, arriving in the
+sweep written to apply it. A ban enforced by a grep that cannot see the shape the file is
+written in is the half-enumerated kill again, and this is its fourth appearance.)
 Defect 13 is the ninth angle and the first where the vacuity is in the **assertion's
 anchor** rather than in a fixture, a harness, or the environment: defect 12's own case
 asserted exit 2 and the substring `CR_LOG_DIR`, which the *wrong* message contains as
@@ -339,28 +358,37 @@ knob, an inherited environment, or a bad anchor: a *combination* of inputs no ca
 reason to build. Its fixture is `fake_healthy_but_slow` with one line moved to stderr, red
 on that case and no other. When a fix reads two sources of one
 signal, write the case where both of them speak.
-TEN of the fourteen defects had a test that should have caught them and could not — defects
-3, 4, and 7 through 14 — and in every one of those ten the vacuity was in the fixture, the
-harness, the inherited environment, or the assertion's anchor, never the assertion's logic. The count is written
+Defect 15 is the eleventh angle and it is **a mode no fixture ran** — the closest sibling to
+defect 12's inherited environment, in that the harness never *chose* the mode rather than
+choosing it wrongly. Every fake in the suite spoke the prose stream, `fake_found_issues`
+included, and that fixture's entire subject is the findings path this defect broke; it was
+green against the buggy script because it speaks the one mode the bug cannot reach. Both new
+fixtures are transcribed from the measured run rather than composed to look plausible, and
+there are two cases rather than one because a wrong fix was available and cheap: making
+branch 2 ignore `unknown` satisfies the findings case while switching the guard off for a
+reviewer that genuinely failed before connecting. When the tool you are reading has a second
+output mode, ask which of your fixtures has ever spoken it.
+ELEVEN of the fifteen defects had a test that should have caught them and could not — defects
+3, 4, and 7 through 15 — and in every one of those eleven the vacuity was in the fixture, the
+harness, the inherited environment, the unrun mode, or the assertion's anchor, never the assertion's logic. The count is written
 against the defect IDs because it was wrong in three places at once for a round: this line
 said SEVEN, the script header said SIX, and defect 12's own entry calls itself the eighth
-shape. A summary number with nothing anchoring it drifts the round after it is written. **The list is not converging on zero — six of the
-fourteen were found after the other eight had been fixed and written up, the eleventh in the
-round that fixed the ninth and tenth, the twelfth in the round that fixed the eleventh, the
-thirteenth in the round that fixed the twelfth, and the fourteenth in the round that fixed
-the thirteenth, all of them in code those write-ups had
-just finished explaining. Treat "fourteen" as the number found so far.**
+shape. A summary number with nothing anchoring it drifts the round after it is written. **The list is not converging on zero — seven of the
+fifteen were found after the other eight had been fixed and written up, the eleventh in the
+round that fixed the ninth and tenth, and each of the twelfth through fifteenth in the round
+that fixed its predecessor, all of them in code those write-ups had
+just finished explaining. Treat the stated total as the number found so far.**
 
 **Rounds three and four of review on that file found nothing whatsoever except stale summary
 counts, and the remedy is now a test rather than a resolution.** The suite reads the header's
 numbered entries as the only source of truth for how many defects there are, then
-checks the prose against them: contiguous ordinals, the stated total (`Fourteen of them.`), the
+checks the prose against them: contiguous ordinals, the stated total (`Fifteen of them.`), the
 same-shape-plus-own-class split, and every `of the <number>` phrase naming a count of four or more. The
 floor of four is measured, not guessed — the header's only other such phrase is `of the two
 caps`, which is two rate limiters rather than two defects, and no rule short of parsing
 English separates them. Proved red four ways, one mutation per assertion, each on that case
 and no other. It deliberately does not parse the test-hole claim (`defects 3, 4, and 7
-through 14`), because a parser for that would break more often than the claim it guards. A
+through 15`), because a parser for that would break more often than the claim it guards. A
 false red costs one reword, which is the cheap direction to be wrong
 in. **The reason this is a test and not a rule in a doc is that the rule was already in the
 doc**, in the paragraph directly above the number that was wrong.

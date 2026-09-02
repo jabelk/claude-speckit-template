@@ -103,6 +103,42 @@ jobs:
             echo "this step would repeat the setsid branch and report it as the fallback" >&2
             exit 1
           fi
+          # A PARTIALLY BUILT FARM WAS INDISTINGUISHABLE FROM A BUILT ONE, which is
+          # this repo's recurring defect in a `run:` block. `ln -s ... || true`
+          # discards every link failure, and the only post-condition above is that
+          # setsid is ABSENT — a farm missing most of its contents satisfies that
+          # perfectly, and the suite then fails 14 cases for reasons unrelated to
+          # setsid. Not hypothetical: the 644-`env` measurement recorded above is
+          # exactly that outcome arriving by a different route, and it cost a round
+          # to diagnose because the failure named the wrong subject. Raised by the
+          # PR-side review 2026-09-01.
+          #
+          # The names are DERIVED, not guessed: they are what the wrapper and its
+          # suite actually invoke, extracted from both files rather than picked as a
+          # plausible-looking set.
+          #
+          # `[ -x ]` ON THE RESOLVED PATH, NOT A BARE `command -v`, and the first
+          # version of this check got that wrong in the one direction that mattered.
+          # It claimed `command -v` "declines a link to a non-executable file, so
+          # this also covers the 644 mode directly" — the 644-`env` measurement two
+          # comments up, which is the only real incident this floor exists for. That
+          # claim was asserted rather than measured, and it is false. Measured
+          # 2026-09-01 against a farm link pointing at a 644 file: bare `command -v`
+          # says ACCEPT under /bin/bash (3.2.57) and /bin/dash, and decline under
+          # /bin/sh and /bin/zsh. So the answer depends on which shell the runner
+          # ships, and a floor whose verdict moves with the interpreter is not one.
+          # `[ -x "$p" ]` declines under all four, because it asks the kernel the
+          # question PATH execution will ask. Same file, same lesson as everything
+          # else in these two scripts: the confident inference was the wrong one.
+          for req in bash env grep sleep mkdir cat awk head chmod date tr tail \
+                     pgrep find mktemp sort seq sed rm cut ls dirname touch comm; do
+            p=$(command -v "$req" 2>/dev/null) || p=
+            if [ -n "$p" ] && [ -x "$p" ]; then continue; fi
+            echo "SHIM FAILED: '$req' is not reachable-and-executable through the" >&2
+            echo "farm, so this step would fail the suite for a reason with nothing" >&2
+            echo "to do with setsid" >&2
+            exit 1
+          done
           # `find`, not `ls | wc -l`, because SC2012 — actionlint runs shellcheck
           # over every `run:` block here, so this line is linted like a script.
           # (Do not start that sentence with the linter's own name: a comment

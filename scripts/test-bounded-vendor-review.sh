@@ -524,6 +524,55 @@ EOF
   chmod +x "$bin/coderabbit"
 }
 
+# DEFECT 15's two fixtures, and the hole they close is A MODE NO FIXTURE RAN. Every
+# other fake in this file speaks the CLI's prose progress stream, `fake_found_issues`
+# included — which is why that case, whose whole subject is the findings path this
+# defect broke, is GREEN against the buggy script. It speaks the one mode the bug does
+# not touch. Both fakes below are transcribed from a real `coderabbit review --agent`
+# run measured 2026-09-01 on 0.7.5: NDJSON status records on stdout, no `elapsed`
+# anywhere, and stderr EMPTY. Inventing a plausible-looking record here would be
+# defect 4's fixture lesson again, so nothing below was written from imagination.
+fake_agent_findings() {
+  local bin="$1"
+  mkdir -p "$bin"
+  cat >"$bin/coderabbit" <<'EOF'
+#!/usr/bin/env bash
+# A findings run in agent mode: reviewed, flagged something, exit 1. The verdict gate
+# MUST report this as a review that happened. Against the prose-only detector the
+# phase verdict is `unknown`, branch 2 fires, and the wrapper prints NO VENDOR REVIEW
+# HAPPENED at exit 3 over a completed review.
+echo '{"type":"review_context","reviewType":"all","currentBranch":"b","baseBranch":"main","workingDirectory":"/tmp/x"}'
+echo '{"type":"status","phase":"connecting","status":"connecting_to_review_service"}'
+echo '{"type":"status","phase":"setup","status":"setting_up"}'
+echo '{"type":"status","phase":"analyzing","status":"summarizing"}'
+echo '{"type":"status","phase":"analyzing","status":"reviewing"}'
+echo '{"type":"finding","file":"a.sh","comment":"x"}'
+exit 1
+EOF
+  chmod +x "$bin/coderabbit"
+}
+
+fake_agent_hang() {
+  local bin="$1"
+  mkdir -p "$bin"
+  cat >"$bin/coderabbit" <<'EOF'
+#!/usr/bin/env bash
+# The other direction, and the reason the fix is not "ignore `unknown`": a genuine
+# agent-mode wedge, stopped at the connect record. CONNECT_CAP must still fire here,
+# which it cannot do while the detector is blind to this shape — a prose-only detector
+# defers to TOTAL_CAP and the advertised 120s bound is silently the 900s one, which is
+# defect 1's shape. Log stopped at the marker, like every hang fake in this file.
+mkdir -p "$CR_LOG_DIR"
+log="$CR_LOG_DIR/$(date -u +%Y-%m-%dT%H-%M-%S)-fake-$$.log"
+echo '{"timestamp":"T","level":"INFO","message":"Starting CodeRabbit CLI v0.7.5"}' >>"$log"
+echo '{"timestamp":"T","level":"INFO","message":"Establishing WebSocket connection to URL","url":"wss://x/ws"}' >>"$log"
+echo '{"type":"review_context","reviewType":"all","currentBranch":"b","baseBranch":"main","workingDirectory":"/tmp/x"}'
+echo '{"type":"status","phase":"connecting","status":"connecting_to_review_service"}'
+sleep 600
+EOF
+  chmod +x "$bin/coderabbit"
+}
+
 fake_error_before_reviewing() {
   local bin="$1"
   mkdir -p "$bin"
@@ -722,6 +771,28 @@ case_run "findings (CLI exit 1) -> this script still exits 0" \
 
 case_run "findings -> reports the CLI status without adopting it" \
   0 "exit status 1" "" fake_found_issues
+
+# DEFECT 15, and the two cases below are the mode this whole suite had never run. The
+# skills document `bounded-vendor-review --agent`, where the CLI emits NDJSON and NO
+# `elapsed` line at all, so the prose-only detector returned `unknown` forever. The two
+# consequences pull in opposite directions and each needs its own case, because a fix
+# that only satisfied one of them is available and wrong: making branch 2 ignore
+# `unknown` would pass this first case and switch the guard off for a reviewer that
+# genuinely failed before connecting.
+#
+# The findings case is the false refusal. Same substance as the two cases above it and
+# the same expected outcome, differing only in the mode — which is exactly why those two
+# were green while this path was broken. The rejected substring is load-bearing here,
+# since the pre-fix script exits 3 and prints it over a completed review.
+case_run "agent-mode findings -> a verdict, not a refusal" \
+  0 "exit status 1" "" fake_agent_findings "NO VENDOR REVIEW HAPPENED"
+
+# And the mirror: CONNECT_CAP must still fire in agent mode. Without reading the NDJSON
+# phase, the verdict is `unknown`, the early kill declines, and this run is stopped by
+# TOTAL_CAP instead — the same wording swap as defect 4's case, so the SENTENCE is the
+# discrimination and the 11s bound proves which cap did it.
+case_run "agent-mode wedge -> the connect kill still fires" \
+  3 "never got past its connect phase" 11 fake_agent_hang
 
 # DEFECT 9, and it is the first FALSE REFUSAL in this file rather than a false pass.
 # `TOTAL_CAP=3 POLL=5` makes the first nap end exactly on the cap, and the fake
@@ -1420,8 +1491,16 @@ fi
 # rather than a copy of it in the preflight suite: two patterns can drift, and a drifted
 # ban is a ban with a hole in it. A missing file here reads as a clean scan, so the
 # check refuses outright if any of the four is unreadable.
+# `$HERE`, not `dirname "$0"`. The two disagree the moment the suite is invoked from
+# another directory or through a symlink, and $HERE is the absolute form this script
+# already computed once at the top for exactly that reason. With the relative form the
+# four scripts are unreadable, the refusal fires, and it reports a stale-total scan
+# problem when the actual problem is the invocation path — the WRONG-DIAGNOSIS class
+# that defect 13 is about, in the check written against defect 13's cousin. Raised by
+# the PR-side review 2026-09-01, and it never showed locally because every run of this
+# suite so far has been `./scripts/test-bounded-vendor-review.sh` from the repo root.
 if [ -z "$hdr_fail" ]; then
-  hdr_scan_dir=$(dirname "$0")
+  hdr_scan_dir="$HERE"
   hdr_scan_files=""
   for f in bounded-vendor-review.sh test-bounded-vendor-review.sh \
            preflight-vendor-review.sh test-preflight-vendor-review.sh; do
