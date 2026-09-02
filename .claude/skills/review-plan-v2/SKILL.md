@@ -103,8 +103,8 @@ fail-closed path for unreadable repositories and proved nothing. There is now on
 per variable set alone on a clean tree, one with a valid alternate index built by
 `git read-tree HEAD`, and one running the same clean tree with nothing exported that
 must pass, because without it a script refusing everything would score green on all
-four. The suite reached 24 cases at that round; seen red at `17 passed, 7 failed` by
-neutering the refusal.
+four. The suite reached 24 cases at that round; neutering the refusal is red on exactly
+the seven environment cases and nothing else.
 
 **An eleventh round fixed the refusal's own advice, which could defeat the refusal.**
 `env -u ...` applies to the command it prefixes and nothing else, so a caller told only
@@ -116,7 +116,7 @@ gave `leg1 sees: unset` and then `leg2 sees: /tmp/other-probe-repo/.git`, while 
 GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR` in the caller's own shell, shows the
 wrapping form second, and says outright that a prefix on one leg covers only that leg. A
 25th test case asserts that wording, because advice which defeats the guard is part of
-the guard; seen red at `24 passed, 1 failed` by replacing the wrapping form with a bare
+the guard; seen red on that one case by replacing the wrapping form with a bare
 `env -u` mention.
 
 **A twelfth round: an explicitly EMPTY git variable walked through the refusal, and
@@ -141,12 +141,12 @@ GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR` as advice on *every* refusal — so
 substring was present whichever variable had actually been set, and no assertion could
 distinguish a refusal that names the offender from one that names nothing. Measured
 rather than argued: strip `$poisoned` from the refusal's first line so it names nothing
-at all, and the bare-name form scores `29 passed, 0 failed`; the tightened form,
-matching `environment: $v` after the colon, scores `20 passed, 9 failed`. Nine
+at all, and the bare-name form scores green with zero failures; the tightened form,
+matching `environment: $v` after the colon, is red on nine, one per assertion. Nine
 assertions that read as coverage for four rounds and were decoration. The anchor
 matters as much as the needle — grep for the *sentence* the check produces, not for a
 token that also appears in its advice. Suite is 29 cases at that round; the four new empty-value
-cases are red at `25 passed, 4 failed` against the previous script.
+cases are red against the previous script, and no other case is.
 
 **`scripts/bounded-vendor-review.sh` is the second committed guard on this leg, and it
 exists because the CLI can hang forever.** On 2026-08-31 `coderabbit review` stopped

@@ -30,8 +30,8 @@
 #
 #   - Round 12, the empty-value hole. Against the HEAD copy, whose refusal tested
 #     `[ -n "${!v:-}" ]`, the four new set-but-EMPTY cases failed with `exit 0,
-#     wanted 2` — 25 passed, 4 FAILED of 29. `GIT_DIR= <the gate>` walked straight
-#     through a guard whose whole subject is git location variables.
+#     wanted 2` — 4 FAILED, and no other case. `GIT_DIR= <the gate>` walked
+#     straight through a guard whose whole subject is git location variables.
 #
 #   - The nine git-variable assertions were VACUOUS, and this one was measured
 #     rather than reasoned about. They greped the output for the bare variable NAME,
@@ -39,9 +39,17 @@
 #     GIT_COMMON_DIR` as advice on every refusal — so the substring was present
 #     whichever variable had actually been set, and the assertion could not fail.
 #     Proof: strip `$poisoned` from the refusal's first line, so it names NOTHING,
-#     and the bare-name form scores 29 passed, 0 failed. The same mutation against
-#     the tightened form (`environment: $v`, matching after the colon) is 20 passed,
-#     9 FAILED. Nine assertions that read as coverage and were decoration.
+#     and the bare-name form scores GREEN — zero failures. The same mutation against
+#     the tightened form (`environment: $v`, matching after the colon) is 9 FAILED,
+#     one per assertion. Nine that read as coverage and were decoration.
+#
+# NO ABSOLUTE SUITE TOTAL APPEARS ABOVE, and the two that did are why. A pass count
+# beside a failure count, or a suite size after an `of`, is a true measurement that
+# the next added case falsifies with no mechanism to say so — so what is recorded is
+# the FAILURE count, which is the discrimination the mutation was actually claiming.
+# `test-bounded-vendor-review.sh` enforces this across all four guard scripts; the
+# totals here were invisible to it for one round because it scanned only its own two
+# files, which is the same half-enumeration it had just been fixed for.
 #
 # Usage:  scripts/test-preflight-vendor-review.sh
 #         BULK=1000 scripts/test-preflight-vendor-review.sh   # expected to FAIL

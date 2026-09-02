@@ -1409,12 +1409,37 @@ fi
 # this comment quoted three retired totals, and the second quoted the very shape the
 # fix had just been written to catch. A false red costs one reword; a stale total costs
 # a reader believing a number.
+#
+# AND IT SCANS ALL FOUR GUARD SCRIPTS, not the bounded pair, which was the THIRD
+# half-enumeration in three rounds and was caught the same way as the other two — by a
+# reviewer, on the round that fixed the previous one. Scanning `$UNDER_TEST` and `$0`
+# left the preflight script and its suite outside a ban whose whole argument is that a
+# partial ban is defect 8's shape, and there were totals sitting in the preflight suite
+# while this check reported the class eliminated. The list is now every guard script in
+# `scripts/`, which is the enumeration the argument requires. One pattern in one place
+# rather than a copy of it in the preflight suite: two patterns can drift, and a drifted
+# ban is a ban with a hole in it. A missing file here reads as a clean scan, so the
+# check refuses outright if any of the four is unreadable.
 if [ -z "$hdr_fail" ]; then
-  hdr_tot=$(grep -h '^#' "$UNDER_TEST" "$0" |
-            grep -oiE '[0-9]{1,2} passed, [0-9]{1,2} failed|of [0-9]{1,2}[,)]|[0-9]{1,2}/[0-9]{1,2}' |
-            head -1)
-  [ -n "$hdr_tot" ] &&
-    hdr_fail="an absolute suite total (\"$hdr_tot\") is stated in a comment — it goes stale on the next added case; state the failure count instead"
+  hdr_scan_dir=$(dirname "$0")
+  hdr_scan_files=""
+  for f in bounded-vendor-review.sh test-bounded-vendor-review.sh \
+           preflight-vendor-review.sh test-preflight-vendor-review.sh; do
+    if [ -r "$hdr_scan_dir/$f" ]; then
+      hdr_scan_files="$hdr_scan_files $hdr_scan_dir/$f"
+    else
+      hdr_fail="cannot read $hdr_scan_dir/$f, so the absolute-total scan would report a clean pass over a file it never opened"
+      break
+    fi
+  done
+  # shellcheck disable=SC2086  # deliberate word splitting: the list is script names we built
+  if [ -z "$hdr_fail" ]; then
+    hdr_tot=$(grep -h '^#' $hdr_scan_files |
+              grep -oiE '[0-9]{1,2} passed, [0-9]{1,2} failed|of [0-9]{1,2}[,)]|[0-9]{1,2}/[0-9]{1,2}' |
+              head -1)
+    [ -n "$hdr_tot" ] &&
+      hdr_fail="an absolute suite total (\"$hdr_tot\") is stated in a guard script comment — it goes stale on the next added case; state the failure count instead"
+  fi
 fi
 
 if [ -n "$hdr_fail" ]; then
