@@ -32,7 +32,7 @@ scripts/preflight-vendor-review.sh \
 ```
 
 **The guard is a script because seven review rounds proved prose could not hold it,
-and it has taken eleven in total.** It lived here, as nine lines of shell in a fenced
+and it has taken twelve in total.** It lived here, as nine lines of shell in a fenced
 block, from 2026-08-29 to 2026-08-31. In that window CodeRabbit caught, in order: the
 missing `if` (its clean result is `grep` exiting 1, so the desired outcome looked like
 failure); the fail-open pipeline capture (`if git status | grep '^??'` reports
@@ -387,8 +387,13 @@ same-shape-plus-own-class split, and every `of the <number>` phrase naming a cou
 floor of four is measured, not guessed — the header's only other such phrase is `of the two
 caps`, which is two rate limiters rather than two defects, and no rule short of parsing
 English separates them. Proved red four ways, one mutation per assertion, each on that case
-and no other. It deliberately does not parse the test-hole claim (`defects 3, 4, and 7
-through 15`), because a parser for that would break more often than the claim it guards. A
+and no other. It does not parse WHICH defects the test-hole claim names (`defects 3, 4, and 7
+through 15`), because that is prose and a parser for it would break more often than the claim
+it guards — but a sixth check does pin where the range ENDS, since that part is a digit and is
+the same digit as the entry count. The reviewer found that range stale in two files in one
+round, the day after the fifteenth entry landed, with every other check green: leaving the
+whole phrase unparsed was right about the list and wrong about the number, which is a stated
+limit that needed no new evidence to close. A
 false red costs one reword, which is the cheap direction to be wrong
 in. **The reason this is a test and not a rule in a doc is that the rule was already in the
 doc**, in the paragraph directly above the number that was wrong.

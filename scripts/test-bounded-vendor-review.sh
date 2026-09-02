@@ -1309,9 +1309,10 @@ fi
 # English separates them. Anything below four is left alone; every defect total
 # this file has ever carried has been well above it.
 #
-# What it deliberately does NOT check is the test-hole count, because "defects 3,
-# 4, and 7 through 14" is prose and a parser for it would break more often than
-# the claim it guards.
+# What it deliberately does not check is WHICH defects had a test hole — "defects 3,
+# 4, and 7 through 15" is a claim about ten specific entries and no parser settles it.
+# What check F below DOES pin is the range's upper end, because that part is not prose:
+# it is a digit, and it is the same digit as the entry count.
 #
 # IT WORKED, AND ON ITS FIRST REAL USE, WHICH IS WHY THIS PARAGRAPH IS PAST TENSE
 # NOW. Defect 13 landed the same day this case was written; adding the entry took
@@ -1518,6 +1519,41 @@ if [ -z "$hdr_fail" ]; then
               head -1)
     [ -n "$hdr_tot" ] &&
       hdr_fail="an absolute suite total (\"$hdr_tot\") is stated in a guard script comment — it goes stale on the next added case; state the failure count instead"
+  fi
+fi
+
+# (F) every quoted "7 through <n>" test-hole range ends at the entry count
+#
+# THE PR-SIDE REVIEW FOUND THIS ONE TWICE IN A SINGLE ROUND — the range quoted here and
+# the range quoted in the review-plan-v2 skill, both still ending at fourteen the day
+# after the fifteenth entry landed. A and B had already gone green on that same run,
+# because the range is a DIGIT inside a sentence and nothing above was looking at it.
+# The reason it went unguarded is written three paragraphs up in this file's own words:
+# the test-hole claim is prose, a parser for it would break more often than the claim,
+# so the whole phrase was left alone. That was true of WHICH defects the range names and
+# false of WHERE IT ENDS, which is the same mistake as a stated limit that needs no new
+# evidence to close — the fourteenth defect's lesson, arriving in the check written to
+# hold the counts this file makes about itself.
+#
+# Scoped to the four guard scripts like (E), and for the same argument: a ban that skips
+# a file is defect 8's half-enumeration. The doc-side copies of this sentence live in two
+# other repos and are outside anything this suite can read, so they are NOT covered here
+# and that is stated rather than implied — the promotion step is what keeps them honest,
+# and it is a human step. Fails CLOSED in the one direction that matters: a range that
+# cannot be found at all is not silently a pass, because the phrase is quoted in this
+# very comment, so zero matches means the scan itself broke.
+if [ -z "$hdr_fail" ]; then
+  # shellcheck disable=SC2086  # deliberate word splitting: the same list (E) built
+  hdr_ranges=$(grep -h '^#' $hdr_scan_files | grep -oE '7 through [0-9]{1,2}' |
+               grep -oE '[0-9]{1,2}$' | sort -u)
+  if [ -z "$hdr_ranges" ]; then
+    hdr_fail="found no \"7 through <n>\" range in the four guard scripts, but this file quotes one — the scan broke rather than passed"
+  else
+    while read -r r; do
+      [ -n "$r" ] || continue
+      [ "$r" = "$n_defects" ] ||
+        hdr_fail="a test-hole range ends at $r but the enumeration has $n_defects entries"
+    done <<<"$hdr_ranges"
   fi
 fi
 

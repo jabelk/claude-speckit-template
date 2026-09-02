@@ -57,7 +57,7 @@
 # gate that neither passes nor fails, and the operator finds out only by noticing
 # that nothing has happened for twenty minutes.
 #
-# The gate's OTHER guard, preflight-vendor-review, took eleven review rounds on
+# The gate's OTHER guard, preflight-vendor-review, took twelve review rounds on
 # one lesson: a check whose failure is indistinguishable from its success is not
 # a check. This is the adjacent failure — a check that never returns a verdict at
 # all — and it is worse in one specific way. A fail-open guard at least leaves an

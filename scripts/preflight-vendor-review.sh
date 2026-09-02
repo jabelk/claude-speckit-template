@@ -77,7 +77,7 @@
 # location variables one at a time, and 20,000 untracked files, and fails if any
 # of them passes.
 #
-# Rounds 8 to 11 came after the move into this file, and none was a repeat of the
+# Rounds 8 to 12 came after the move into this file, and none was a repeat of the
 # seven. Round 8 WIDENED the check (see WHAT IT REJECTS above) and deleted the
 # last command from the decision. Round 9 found that git's own location variables
 # outranked the `cd`, so the script could inspect a different repository than the
@@ -85,8 +85,15 @@
 # the other legs of the gate run in the caller's shell and inherit those
 # variables anyway — so it became a refusal. Round 11 fixed the refusal's own
 # ADVICE, which told the caller to use `env -u ...` without saying it has to wrap
-# the whole chain. Being a script is what let all four be reproduced in ten lines
-# and pinned by tests, rather than argued about.
+# the whole chain. Round 12 found `[ -n "${!v:-}" ]` cannot see a set-but-EMPTY
+# value, so `GIT_DIR= <the gate>` walked through the refusal — and nine test
+# assertions that greped for the bare variable NAME, which the refusal's advice
+# line prints on every refusal whichever variable was set. Being a script is what
+# let all five be reproduced in ten lines and pinned by tests, rather than argued
+# about. This summary itself said "rounds 8 to 11" and "all four" until
+# 2026-09-01, one round after round 12 landed: a count contradicting the
+# enumeration below it, which is the class the bounded suite's header check exists
+# for, in the file that check scans and about the part of it nothing parses.
 #
 # What it does NOT check: files matched by `.gitignore`. The vendor never
 # receives them, so they are not this script's business.
